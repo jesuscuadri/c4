@@ -50,6 +50,7 @@ async function cargarEstado() {
     if (j.cargando) { $("chip-txt").textContent = "Leyendo el tiempo real…"; return; }
     if (LINEA && j.fecha && j.fecha !== LINEA.fecha) { await cargarLinea(); iniciarSelectores(); }
     R = j; tRecibido = Date.now();
+    pintarTrenesMapa._cruces = null;
     pintarTodo();
   } catch (e) {
     const c = $("chip"); c.className = "chip sin_conexion"; $("chip-txt").textContent = "El programa no responde";
@@ -203,32 +204,227 @@ function retrasoActual(t) {
 }
 
 /* ---------------------------------------------------------------- mapa */
+let capaCruces = null, capaRuta = null, marcaYo = null, trenSel = null, seguir = false, etiquetasEst = [];
+const oscuroMapa = () => matchMedia("(prefers-color-scheme: dark)").matches;
+
 function iniciarMapa() {
   if (mapa || !window.L) {
     if (!window.L) $("mapa").innerHTML = `<div class="vacio">No se pudo cargar el mapa (hace falta internet para los planos de OpenStreetMap).</div>`;
     return;
   }
-  const oscuro = matchMedia("(prefers-color-scheme: dark)").matches;
-  mapa = L.map("mapa", { zoomControl: true, attributionControl: true, zoomSnap: 0.25 });
-  L.tileLayer(`https://{s}.basemaps.cartocdn.com/${oscuro ? "dark_all" : "light_all"}/{z}/{x}/{y}{r}.png`, {
-    maxZoom: 19, subdomains: "abcd",
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>',
-  }).addTo(mapa);
-  const traz = L.polyline(LINEA.trazado, { color: "#e93cac", weight: 5, opacity: 0.85 }).addTo(mapa);
+  mapa = L.map("mapa", { zoomControl: false, attributionControl: true, zoomSnap: 0.25, tap: true });
+  L.control.zoom({ position: "bottomright" }).addTo(mapa);
+  // Planos sin clave: OpenStreetMap (oscurecido con un filtro en modo oscuro) y satélite de Esri
+  const planos = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19, className: "base-osm",
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+  });
+  const satelite = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+    maxZoom: 19, attribution: "Imágenes &copy; Esri, Maxar, Earthstar Geographics",
+  });
+  (leer("capa", "planos") === "satelite" ? satelite : planos).addTo(mapa);
+  L.control.layers({ "Plano": planos, "Satélite": satelite }, null, { position: "topright" }).addTo(mapa);
+  mapa.on("baselayerchange", (e) => guardar("capa", e.name === "Satélite" ? "satelite" : "planos"));
+
+  // Vía: borde + línea para que se lea sobre cualquier fondo
+  L.polyline(LINEA.trazado, { color: oscuroMapa() ? "#000" : "#fff", weight: 9, opacity: 0.55, interactive: false }).addTo(mapa);
+  L.polyline(LINEA.trazado, { color: "#e93cac", weight: 5, opacity: 0.95, interactive: false }).addTo(mapa);
+  capaRuta = L.layerGroup().addTo(mapa);
+
   for (const e of LINEA.estaciones) {
-    L.circleMarker([e.lat, e.lon], e.cruce
-      ? { radius: 6.5, color: "#e93cac", weight: 3, fillColor: "#fff", fillOpacity: 1 }
-      : { radius: 3.5, color: "#e93cac", weight: 2, fillColor: "#fff", fillOpacity: 1 })
-      .bindTooltip(`<b>${esc(e.nombre)}</b>${e.cruce ? "<br>Vía de cruce" : ""}`, { direction: "top", offset: [0, -4] })
-      .on("click", () => { $("est").value = e.k; guardar("est", e.k); irA("estacion"); })
+    const m = L.circleMarker([e.lat, e.lon], e.cruce
+      ? { radius: 7, color: "#e93cac", weight: 3.5, fillColor: "#fff", fillOpacity: 1 }
+      : { radius: 4, color: "#e93cac", weight: 2.5, fillColor: "#fff", fillOpacity: 1 })
       .addTo(mapa);
+    m.bindTooltip(esc(nombreCorto(e.nombre)), { permanent: true, direction: "right", offset: [8, 0],
+      className: "etq-est" + (e.cruce ? " cruce" : "") });
+    m.bindPopup(() => popupEstacion(e.k), { maxWidth: 300, minWidth: 230, autoPanPaddingTopLeft: [70, 70], autoPanPaddingBottomRight: [20, 20] });
+    m.on("popupopen", () => { m._abierto = true; }).on("popupclose", () => { m._abierto = false; });
+    e._marca = m;
+    etiquetasEst.push([e, m]);
   }
+  capaCruces = L.layerGroup().addTo(mapa);
   capaTrenes = L.layerGroup().addTo(mapa);
-  mapa.fitBounds(traz.getBounds(), { padding: [20, 20] });
+  mapa.on("zoomend", ajustarEtiquetas);
+  mapa.on("dragstart", () => { if (seguir) { seguir = false; pintarFichaTren(); } });
+  mapa.on("click", () => seleccionarTren(null));
+  crearControlesMapa();
+  mapa.fitBounds(L.latLngBounds(LINEA.trazado), { padding: [20, 20] });
+  ajustarEtiquetas();
 }
+
+function crearControlesMapa() {
+  const Ctl = L.Control.extend({
+    options: { position: "topleft" },
+    onAdd() {
+      const d = L.DomUtil.create("div", "mapa-botones");
+      d.innerHTML = `<button type="button" id="m-yo" title="Mi estación más cercana">📍<span class="txt-l" id="m-yo-txt"> Cerca de mí</span></button>
+        <button type="button" id="m-linea" title="Ver toda la línea">↔<span class="txt-l"> Toda la línea</span></button>
+        <button type="button" id="m-grande" title="Ampliar mapa">⤢</button>`;
+      L.DomEvent.disableClickPropagation(d);
+      return d;
+    },
+  });
+  mapa.addControl(new Ctl());
+  const ficha = L.DomUtil.create("div", "ficha-tren");
+  ficha.id = "ficha-tren";
+  ficha.hidden = true;
+  $("mapa").appendChild(ficha);
+  L.DomEvent.disableClickPropagation(ficha);
+  $("m-linea").onclick = () => { seguir = false; mapa.fitBounds(L.latLngBounds(LINEA.trazado), { padding: [20, 20] }); };
+  $("m-grande").onclick = () => {
+    document.body.classList.toggle("mapa-grande");
+    $("m-grande").textContent = document.body.classList.contains("mapa-grande") ? "✕" : "⤢";
+    setTimeout(() => mapa.invalidateSize(), 80);
+  };
+  $("m-yo").onclick = cercaDeMi;
+}
+
+function ajustarEtiquetas() {
+  const z = mapa.getZoom();
+  mapa.getContainer().classList.toggle("lejos", z < 11);  // vista general: menos texto
+  for (const [e, m] of etiquetasEst) {
+    const el = m.getTooltip() && m.getTooltip().getElement();
+    if (el) el.style.display = e.cruce ? (z >= 10 ? "" : "none") : (z >= 12.5 ? "" : "none");
+  }
+}
+
+function cercaDeMi() {
+  const b = $("m-yo");
+  const txt = (t) => { b.innerHTML = `📍<span class="txt-l"> ${esc(t)}</span>`; b.classList.add("con-txt"); };
+  if (!navigator.geolocation) { txt("Sin ubicación"); return; }
+  txt("Buscando…");
+  navigator.geolocation.getCurrentPosition((pos) => {
+    const yo = [pos.coords.latitude, pos.coords.longitude];
+    const d = (e) => { const dx = (e.lon - yo[1]) * 81, dy = (e.lat - yo[0]) * 111; return Math.hypot(dx, dy); };
+    const e = LINEA.estaciones.reduce((a, x) => (d(x) < d(a) ? x : a));
+    if (!marcaYo) marcaYo = L.circleMarker(yo, { radius: 7, color: "#fff", weight: 3, fillColor: "#1a73e8", fillOpacity: 1 }).addTo(mapa);
+    else marcaYo.setLatLng(yo);
+    marcaYo.bindTooltip("Estás aquí");
+    mapa.fitBounds(L.latLngBounds([yo, [e.lat, e.lon]]).pad(0.6), { maxZoom: 15 });
+    setTimeout(() => e._marca.openPopup(), 350);
+    txt(`${nombreCorto(e.nombre)} · ${d(e) < 1 ? Math.round(d(e) * 1000) + " m" : d(e).toFixed(1) + " km"}`);
+  }, (err) => {
+    txt(err.code === 1 ? "Permiso de ubicación denegado" : "No se pudo obtener la ubicación");
+    setTimeout(() => { b.innerHTML = `📍<span class="txt-l"> Cerca de mí</span>`; b.classList.remove("con-txt"); }, 4000);
+  }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 });
+}
+
+function proximasSalidas(k, dir, n) {
+  const now = ahora(), out = [];
+  for (const t of R.trenes) {
+    if (t.dir !== dir || t.fin || t.cancelado) continue;
+    const j = t.k.indexOf(k);
+    if (j < 0 || !t.para[j] || t.j0 > j) continue;
+    const esFin = j === t.k.length - 1, h = esFin ? t.est_a[j] : t.est_d[j];
+    if (h == null || h < now - 0.5 || esFin) continue;
+    out.push({ t, j, h, retr: h - (t.prog_d[j]) });
+  }
+  return out.sort((a, b) => a.h - b.h).slice(0, n);
+}
+function popupEstacion(k) {
+  const e = est(k);
+  const fila = ({ t, h, retr }) => {
+    const min = Math.max(0, Math.round(h - ahora()));
+    return `<tr data-tren="${t.id}" class="clic"><td class="num"><b>${hm(h)}</b></td><td>${esc(destinoCorto(t))}<br><span class="pp-sub">tren ${t.num}</span></td>
+      <td class="num" style="text-align:right">${min < 60 ? min + " min" : ""}<br>${retr >= 1 ? `<span class="tag ${retr <= 5 ? "warn" : "bad"}" style="margin:0">+${Math.round(retr)}</span>` : ""}</td></tr>`;
+  };
+  const col = (dir, tit, color) => {
+    const l = proximasSalidas(k, dir, 3);
+    return `<div class="pp-tit"><span class="bola" style="background:${color}"></span>${tit}</div>` +
+      (l.length ? `<table class="pp-tabla">${l.map(fila).join("")}</table>` : `<div class="pp-sub" style="padding:4px 0 8px">Sin más salidas hoy</div>`);
+  };
+  return `<div class="pp"><div class="pp-cab"><b>${esc(e.nombre)}</b>${e.cruce ? '<span class="tag warn" style="margin-left:6px">vía de cruce</span>' : ""}</div>
+    ${col(-1, "Hacia Gijón", "var(--vta)")}${col(1, "Hacia Avilés / Cudillero", "var(--ida)")}
+    <button type="button" class="pp-btn" onclick="$('est').value=${k};guardar('est',${k});irA('estacion')">Ver todas las salidas</button></div>`;
+}
+
+function pintarCrucesMapa() {
+  if (!capaCruces) return;
+  capaCruces.clearLayers();
+  const now = ahora(), vistos = new Set();
+  for (const c of R.cruces || []) {  // vienen ordenados por hora: solo el próximo de cada estación
+    if (c.hora < now - 1 || c.hora > now + 45 || vistos.has(c.k)) continue;
+    vistos.add(c.k);
+    const e = est(c.k), malo = c.ida.retraso_extra > 0.5 || c.vuelta.retraso_extra > 0.5;
+    const espera = Math.max(c.ida.retraso_extra, c.vuelta.retraso_extra);
+    L.marker([e.lat, e.lon], {
+      icon: L.divIcon({ className: "", iconSize: null,
+        html: `<div class="cruce-m${malo ? " malo" : ""}">⇄ ${hm(c.hora)}</div>` }),
+      zIndexOffset: 200, keyboard: false,
+    }).bindTooltip(`<b>Cruce en ${esc(c.estacion)} · ${hm(c.hora)}</b><br>${c.ida.num} (→ Cudillero/Avilés) y ${c.vuelta.num} (→ Gijón)` +
+      (malo ? `<br>Uno de los dos espera ~${Math.round(espera)} min más de lo previsto` : "") +
+      (c.info === "movido" ? `<br>Cruce trasladado (en horario: ${esc(c.programado)})` : ""), { direction: "top", offset: [0, -14] })
+      .addTo(capaCruces);
+  }
+}
+
+function rumbo(x, dir) {
+  const a = latlonKm(x), b = latlonKm(x + 0.15 * dir), c = latlonKm(x - 0.15 * dir);
+  const p1 = mapa.latLngToLayerPoint(b ? a : c), p2 = mapa.latLngToLayerPoint(b || a);
+  return (Math.atan2(p2.y - p1.y, p2.x - p1.x) * 180) / Math.PI;
+}
+
+function seleccionarTren(id) {
+  trenSel = id;
+  seguir = !!id && seguir;
+  capaRuta && capaRuta.clearLayers();
+  pintarFichaTren();
+  pintarTrenesMapa();
+}
+
+function pintarFichaTren() {
+  const f = $("ficha-tren");
+  if (!f) return;
+  const t = trenSel && R && R.trenes.find((x) => x.id === trenSel);
+  if (!t) { f.hidden = true; f._html = null; return; }
+  const j = Math.min(t.j0, t.k.length - 1), sig = est(t.k[j]).nombre;
+  const r = Math.round(retrasoActual(t));
+  const proxCruce = (R.cruces || []).find((c) => (c.ida.id === t.id || c.vuelta.id === t.id) && c.hora >= ahora() - 0.5);
+  f.hidden = false;
+  const html = `<div class="ft-cab"><span class="ft-num" style="background:${colorDirHex(t.dir)}">${t.num}</span>
+      <div><b>→ ${esc(nombreCorto(t.destino))}</b><div class="pp-sub">${esc(t.situacion)}</div></div>
+      <button type="button" class="ft-x" id="ft-cerrar" aria-label="Cerrar">×</button></div>
+    <div class="ft-datos num">
+      <div><span class="pp-sub">Próxima</span><b>${esc(nombreCorto(sig))} ${hm(t.est_a[j])}</b></div>
+      <div><span class="pp-sub">Llega a ${esc(nombreCorto(t.destino))}</span><b>${hm(t.est_a[t.k.length - 1])}</b></div>
+      <div><span class="pp-sub">Retraso</span><b>${t.con_datos ? (r > 0 ? "+" + r + " min" : "en hora") : "sin datos"}</b></div>
+    </div>
+    ${proxCruce ? `<div class="ft-cruce">⇄ Cruza con el ${proxCruce.ida.id === t.id ? proxCruce.vuelta.num : proxCruce.ida.num} en ${esc(proxCruce.estacion)} a las ${hm(proxCruce.hora)}</div>` : ""}
+    <div class="ft-botones"><button type="button" id="ft-seguir" class="${seguir ? "on" : ""}">${seguir ? "Siguiendo ✓" : "Seguir tren"}</button>
+      <button type="button" id="ft-detalle">Recorrido completo</button></div>`;
+  if (f._html === html) return;  // sin cambios: no rehacer (así no se pierden toques)
+  f._html = html;
+  f.innerHTML = html;
+  $("ft-cerrar").onclick = () => seleccionarTren(null);
+  $("ft-seguir").onclick = () => { seguir = !seguir; pintarFichaTren(); pintarTrenesMapa(); };
+  $("ft-detalle").onclick = () => abrirTren(t.id);
+}
+
+function pintarRutaSel(t, x) {
+  capaRuta.clearLayers();
+  const fin = est(t.k[t.k.length - 1]).km;
+  const K = LINEA.trazado_km, pts = [latlonKm(x)];
+  for (let i = 0; i < K.length; i++) if ((K[i] - x) * t.dir > 0 && (fin - K[i]) * t.dir > 0) pts.push(LINEA.trazado[i]);
+  if (t.dir < 0) pts.splice(1, pts.length - 1, ...pts.slice(1).reverse());
+  pts.push(latlonKm(fin));
+  L.polyline(pts, { color: colorDirHex(t.dir), weight: 8, opacity: 0.9, interactive: false }).addTo(capaRuta);
+  for (let j = t.j0; j < t.k.length; j++) {
+    if (!t.para[j]) continue;
+    const e = est(t.k[j]);
+    L.marker([e.lat, e.lon], { interactive: false, keyboard: false, icon: L.divIcon({ className: "", iconSize: null,
+      html: `<div class="hora-parada" style="border-color:${colorDirHex(t.dir)}">${hm(t.est_a[j])}</div>` }) }).addTo(capaRuta);
+  }
+}
+
 function pintarTrenesMapa() {
   if (!mapa || !R) return;
   const now = ahora(), vivos = new Set();
+  if (pintarTrenesMapa._cruces !== R) {  // datos nuevos (cada 15 s): cruces y ventanas de estación
+    pintarCrucesMapa();
+    pintarTrenesMapa._cruces = R;
+    for (const [e, m] of etiquetasEst) if (m._abierto) m.setPopupContent(popupEstacion(e.k));
+  }
   for (const t of R.trenes) {
     const x = kmTren(t, now);
     if (x == null) continue;
@@ -236,20 +432,32 @@ function pintarTrenesMapa() {
     if (!ll) continue;
     vivos.add(t.id);
     const r = Math.round(retrasoActual(t));
-    const rc = r <= 0 ? "#15803d" : r <= 5 ? "#b45309" : "#c0262d";
-    const html = `<div class="tren-ico" style="opacity:${t.con_datos ? 1 : 0.55}"><span class="p" style="background:${colorDirHex(t.dir)}">${t.num}</span>${t.con_datos ? `<span class="r" style="color:${rc}">+${r}</span>` : ""}</div>`;
+    const rc = !t.con_datos ? "gris" : r <= 0 ? "ok" : r <= 5 ? "warn" : "bad";
+    const ang = Math.round(rumbo(x, t.dir));
+    const sel = t.id === trenSel;
+    const html = `<div class="tren-m ${t.dir > 0 ? "ida" : "vta"}${sel ? " sel" : ""}${t.con_datos ? "" : " sindatos"}">
+      <div class="tm-punto" style="background:${colorDirHex(t.dir)}"><svg class="tm-flecha" width="16" height="16" viewBox="-8 -8 16 16" aria-hidden="true"><path transform="rotate(${ang})" d="M6 0 L-4 -5 L-1.5 0 L-4 5 Z" fill="#fff"/></svg></div>
+      <div class="tm-etq"><b>${t.num}</b><span class="tm-r ${rc}">${t.con_datos ? (r > 0 ? "+" + r : "✓") : "?"}</span></div></div>`;
     let m = marcas[t.id];
     if (!m) {
-      m = marcas[t.id] = L.marker(ll, { icon: L.divIcon({ html, className: "", iconSize: null }), zIndexOffset: 500 })
-        .on("click", () => abrirTren(t.id)).addTo(capaTrenes);
+      m = marcas[t.id] = L.marker(ll, { icon: L.divIcon({ html, className: "", iconSize: null }), zIndexOffset: 1000, riseOnHover: true })
+        .on("click", (ev) => { L.DomEvent.stopPropagation(ev); seleccionarTren(t.id); }).addTo(capaTrenes);
       m._html = html;
     } else {
       m.setLatLng(ll);
       if (m._html !== html) { m.setIcon(L.divIcon({ html, className: "", iconSize: null })); m._html = html; }
     }
-    m.bindTooltip(`Tren ${t.num} → ${esc(t.destino)}<br>${esc(t.situacion)}`, { direction: "top", offset: [0, -12] });
+    m.setZIndexOffset(sel ? 3000 : 1000);
+    if (sel) {
+      if (!pintarTrenesMapa._rutaT || now - pintarTrenesMapa._rutaT > 0.25 || pintarTrenesMapa._rutaId !== t.id) {
+        pintarRutaSel(t, x); pintarTrenesMapa._rutaT = now; pintarTrenesMapa._rutaId = t.id;
+      }
+      if (seguir) mapa.panTo(ll, { animate: true, duration: 0.8 });
+    }
   }
   for (const id of Object.keys(marcas)) if (!vivos.has(id)) { capaTrenes.removeLayer(marcas[id]); delete marcas[id]; }
+  if (trenSel && !vivos.has(trenSel)) seleccionarTren(null);
+  pintarFichaTren();
 }
 
 /* ---------------------------------------------------------------- malla */

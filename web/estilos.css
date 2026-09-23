@@ -83,7 +83,7 @@ select{font-size:16px;width:100%;padding:10px 12px;border-radius:10px;border:1px
 .dos h3{font-size:13px;margin:0 0 6px;display:flex;align-items:center;gap:8px}
 .bola{width:10px;height:10px;border-radius:50%;display:inline-block}
 /* mapa */
-#mapa{height:min(68vh,640px);border-radius:12px;border:1px solid var(--bd);background:var(--panel2)}
+#mapa{position:relative;height:min(72vh,680px);min-height:380px;border-radius:12px;border:1px solid var(--bd);background:var(--panel2);overflow:hidden}
 .leaflet-container{font:inherit}
 .tren-ico{display:flex;align-items:center;gap:4px;transform:translate(-50%,-50%);white-space:nowrap}
 .tren-ico .p{color:#fff;font-weight:800;font-size:11.5px;padding:2px 7px;border-radius:99px;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.35)}
@@ -130,3 +130,75 @@ select{font-size:16px;width:100%;padding:10px 12px;border-radius:10px;border:1px
 .pasos{margin:0;padding-left:20px;color:var(--tx2);font-size:14px}.pasos li{margin-bottom:6px}
 #btn-iphone{padding:5px 10px;font-size:13px}
 @media (max-width:760px){#btn-iphone{display:none}}
+
+/* ---- mapa v2 ---- */
+@media (prefers-color-scheme:dark){.base-osm{filter:invert(1) hue-rotate(180deg) brightness(.92) contrast(.88) saturate(.6)}}
+.leaflet-container{background:var(--panel2)}
+.etq-est{background:color-mix(in srgb,var(--panel) 88%,transparent);border:0;box-shadow:0 1px 3px rgba(0,0,0,.25);color:var(--tx2);font-size:11px;font-weight:600;padding:1px 6px;border-radius:6px}
+.etq-est.cruce{color:var(--tx);font-weight:800;font-size:11.5px}
+.etq-est::before{display:none}
+.mapa-botones{display:flex;flex-direction:column;align-items:flex-start;gap:6px}
+.mapa-botones button{border:0;background:var(--panel);color:var(--tx);border-radius:10px;padding:8px 11px;font-weight:700;font-size:13px;box-shadow:0 1px 5px rgba(0,0,0,.3);cursor:pointer;text-align:left}
+.mapa-botones button:hover{background:var(--panel2)}
+.leaflet-control-layers{border-radius:10px!important;border:0!important;box-shadow:0 1px 5px rgba(0,0,0,.3)!important;background:var(--panel)!important;color:var(--tx)}
+.leaflet-bar a{background:var(--panel);color:var(--tx);border-color:var(--bd)}
+.leaflet-control-attribution{background:color-mix(in srgb,var(--panel) 80%,transparent)!important;color:var(--mut)}
+.leaflet-popup-content-wrapper,.leaflet-popup-tip{background:var(--panel);color:var(--tx);border-radius:12px}
+.leaflet-popup-content{margin:12px 14px}
+.leaflet-tooltip{background:var(--panel);color:var(--tx);border-color:var(--bd)}
+/* tren */
+.tren-m{position:relative;width:0;height:0}
+.tm-punto{position:absolute;left:-11px;top:-11px;width:22px;height:22px;border-radius:50%;border:2.5px solid #fff;box-shadow:0 1px 5px rgba(0,0,0,.45);display:grid;place-items:center;cursor:pointer}
+.tm-flecha{display:block}
+.tm-etq{position:absolute;left:14px;display:flex;align-items:center;gap:4px;white-space:nowrap;background:var(--panel);color:var(--tx);border-radius:8px;padding:2px 5px 2px 7px;font-size:11.5px;box-shadow:0 1px 4px rgba(0,0,0,.35);cursor:pointer}
+.tren-m.ida .tm-etq{top:-28px}.tren-m.vta .tm-etq{top:8px}
+.tren-m.sel .tm-punto{width:28px;height:28px;left:-14px;top:-14px;box-shadow:0 0 0 5px color-mix(in srgb,var(--c4) 35%,transparent),0 1px 5px rgba(0,0,0,.45)}
+.tren-m.sindatos{opacity:.6}
+.tm-r{font-weight:800;border-radius:5px;padding:0 4px;font-size:11px}
+.tm-r.ok{background:var(--okbg);color:var(--ok)}.tm-r.warn{background:var(--warnbg);color:var(--warn)}.tm-r.bad{background:var(--badbg);color:var(--bad)}.tm-r.gris{background:var(--bd);color:var(--tx2)}
+.cruce-m{position:absolute;transform:translate(calc(-100% - 11px),-50%);white-space:nowrap;background:var(--panel);color:var(--tx2);border:1.5px solid var(--bd2);border-radius:7px;padding:1px 6px;font-size:11px;font-weight:700}
+.cruce-m.malo{border-color:var(--warn);color:var(--warn);background:var(--warnbg)}
+.hora-parada{position:absolute;transform:translate(calc(-100% - 8px),6px);background:var(--panel);color:var(--tx);border:2px solid;border-radius:6px;padding:0 5px;font-size:11px;font-weight:800;white-space:nowrap}
+/* ventana de estación */
+.pp-cab{margin-bottom:6px;font-size:14px}
+.pp-tit{display:flex;align-items:center;gap:6px;font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;color:var(--mut);margin:8px 0 2px}
+.pp-tabla{width:100%;border-collapse:collapse;font-size:13px}
+.pp-tabla td{padding:4px 2px;border-bottom:1px solid var(--bd);vertical-align:top}
+.pp-tabla tr.clic{cursor:pointer}
+.pp-sub{color:var(--mut);font-size:11.5px}
+.pp-btn{margin-top:10px;width:100%;border:1px solid var(--bd2);background:var(--panel2);color:var(--tx);border-radius:9px;padding:7px;font-weight:700;cursor:pointer}
+/* ficha del tren seleccionado */
+.ficha-tren{position:absolute;left:10px;right:10px;bottom:10px;z-index:900;max-width:420px;background:var(--panel);color:var(--tx);border-radius:14px;box-shadow:0 6px 24px rgba(0,0,0,.35);padding:12px 14px}
+.ft-cab{display:flex;align-items:center;gap:10px}
+.ft-num{color:#fff;font-weight:800;border-radius:8px;padding:3px 8px}
+.ft-x{margin-left:auto;border:0;background:var(--panel2);color:var(--tx);width:30px;height:30px;border-radius:8px;font-size:18px;cursor:pointer}
+.ft-datos{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:10px 0 6px}
+.ft-datos div{display:flex;flex-direction:column;font-size:13.5px}
+.ft-cruce{font-size:13px;color:var(--warn);background:var(--warnbg);border-radius:8px;padding:5px 8px;margin-bottom:6px}
+.ft-botones{display:flex;gap:8px}
+.ft-botones button{flex:1;border:1px solid var(--bd2);background:var(--panel2);color:var(--tx);border-radius:9px;padding:7px;font-weight:700;cursor:pointer}
+.ft-botones button.on{background:var(--c4);border-color:var(--c4);color:#fff}
+/* mapa a pantalla completa */
+body.mapa-grande{overflow:hidden}
+body.mapa-grande #tab-mapa .panel{position:fixed;inset:0;z-index:1400;margin:0;border-radius:0;padding:env(safe-area-inset-top) 0 0 0;display:flex;flex-direction:column}
+body.mapa-grande #tab-mapa .panel>h2,body.mapa-grande #tab-mapa .panel>.sub,body.mapa-grande #tab-mapa .leyenda{display:none}
+body.mapa-grande #mapa{flex:1;height:auto;border-radius:0;border:0}
+@media (max-width:760px){#mapa{height:calc(100dvh - 250px)}}
+
+@media (max-width:760px){
+  .mapa-botones button{padding:7px 10px;font-size:15px}
+  .mapa-botones button:not(.con-txt) .txt-l{display:none}
+  .mapa-botones button.con-txt{font-size:12.5px}
+  .ficha-tren{left:8px;right:8px;bottom:8px;padding:10px 12px;border-radius:12px}
+  .ft-cab b{font-size:14px}
+  .ft-datos{grid-template-columns:repeat(3,1fr);gap:6px;margin:8px 0 6px}
+  .ft-datos div{font-size:12.5px}
+  .ft-cruce{font-size:12px;padding:4px 7px}
+  .ft-botones button{padding:6px;font-size:13px}
+}
+
+.lejos .tren-m:not(.sel) .tm-etq b{display:none}
+.lejos .tren-m:not(.sel) .tm-etq{padding:1px 3px;left:12px}
+.lejos .tren-m.ida .tm-etq{top:-22px}.lejos .tren-m.vta .tm-etq{top:6px}
+.lejos .cruce-m,.lejos .hora-parada{display:none}
+@media (max-width:760px){#tab-mapa .panel>.sub{display:none}#tab-mapa .panel>h2{margin-bottom:8px}#mapa{height:calc(100dvh - 200px)}}
