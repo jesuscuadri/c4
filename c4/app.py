@@ -8,7 +8,8 @@ import threading
 import time
 import traceback
 import webbrowser
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
+from urllib.parse import parse_qs, urlparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import gtfs
@@ -16,9 +17,9 @@ from .estimador import Estimador
 from .historial import Precision, aprender_tiempos, guardar_observaciones
 from .linea import Linea
 from .tiemporeal import TiempoReal
-from .util import WEB
+from .util import WEB, http_get
 
-VERSION = "2.0"
+VERSION = "2.1"
 
 
 class App:
@@ -37,6 +38,7 @@ class App:
         self.errores_seguidos = 0
         self.url_movil = None
         self.error_inicio = None
+        self._manana = (None, None)
 
     def preparar(self):
         hoy = date.today()
@@ -102,9 +104,25 @@ class App:
             "en_circulacion": sum(1 for t in res["trenes"] if not t["fin"] and t["j0"] > 0 or t["parado"] and not t["fin"] and t["con_datos"]),
             "tramos_aprendidos": len(self.aprendidos),
             "modo_cruces": self.cfg["cruces"],
+            "ts": round(time.time()),
         })
         with self.lock:
             self.res = res
+
+    def manana(self, o_id, d_id):
+        """Primeros trenes de mañana entre dos estaciones (para cuando ya no quedan hoy)."""
+        dia = date.today() + timedelta(days=1)
+        if self._manana[0] != dia:
+            self._manana = (dia, Linea(self.cfg, gtfs.extraer(self.cfg, dia)))
+        L = self._manana[1]
+        out = []
+        for v in L.viajes.values():
+            jo, jd = v.stop_j.get(o_id), v.stop_j.get(d_id)
+            if jo is not None and jd is not None and jo < jd:
+                out.append({"num": v.num, "sale": round(v.sd[jo], 2), "llega": round(v.sa[jd], 2),
+                            "destino": L.nombre[v.k[-1]]})
+        out.sort(key=lambda x: x["sale"])
+        return {"fecha": dia.isoformat(), "trenes": out[:4]}
 
     def bucle(self):
         while True:
@@ -162,6 +180,14 @@ def servir(app, abrir=True, en_red=False, publico=False):
                     return self._json(app.linea_json or {"cargando": True, "error": app.error_inicio})
             if ruta == "/api/precision":
                 return self._json(Precision.estadisticas())
+            if ruta == "/api/ping":
+                return self._json({"ok": True, "hora": datetime.now().strftime("%H:%M:%S")})
+            if ruta == "/api/manana":
+                q = parse_qs(urlparse(self.path).query)
+                try:
+                    return self._json(app.manana(q.get("o", [""])[0], q.get("d", [""])[0]))
+                except Exception as e:  # noqa: BLE001
+                    return self._json({"error": str(e), "trenes": []})
             if ruta == "/":
                 ruta = "/index.html"
             fichero = os.path.normpath(os.path.join(WEB, ruta.lstrip("/")))
@@ -191,4 +217,23 @@ def servir(app, abrir=True, en_red=False, publico=False):
             print("No se ha podido averiguar la IP de este ordenador en la wifi.")
     if abrir:
         threading.Timer(1.2, lambda: webbrowser.open(url)).start()
+    externa = os.environ.get("RENDER_EXTERNAL_URL") or os.environ.get("C4_URL_PUBLICA")
+    if publico and externa:
+        threading.Thread(target=mantener_despierto, args=(externa,), daemon=True).start()
     srv.serve_forever()
+
+
+def mantener_despierto(url):
+    """En el plan gratis de Render el servidor se duerme tras 15 min sin visitas y tarda
+    ~1 min en despertar. Mientras circulan trenes (5:00-0:45) se visita a sí mismo cada
+    10 min para estar siempre listo. Fuera de ese horario se deja dormir (ahorra horas)."""
+    print("Manteniendo despierto %s en horario de trenes" % url)
+    while True:
+        time.sleep(600)
+        ahora = datetime.now()
+        minuto = ahora.hour * 60 + ahora.minute
+        if minuto >= 5 * 60 or minuto <= 45:
+            try:
+                http_get(url.rstrip("/") + "/api/ping", timeout=30)
+            except Exception as e:  # noqa: BLE001
+                print("Aviso (despertar):", e)

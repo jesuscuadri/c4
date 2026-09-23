@@ -29,7 +29,7 @@ La primera vez descarga el horario oficial de Renfe (unos 2 MB) y lo guarda en `
 
 ## Pantallas
 
-- **Mi viaje.** Eliges origen y destino y ves los próximos trenes. Para cada uno salen tres horas: *horario*, *app oficial* y *estimado*. También se indica cuándo llegarás más tarde (o antes) que lo que dice la app y el motivo, por ejemplo: «Espera en Veriña a que llegue el 70210».
+- **Mi viaje.** Guarda tus trayectos favoritos (★) y pon cuántos minutos tardas andando a la estación: te dice **a qué hora salir de casa** y qué trenes ya no pillas. Botón **Compartir llegada** para mandarla por WhatsApp. Si ya no quedan trenes hoy, enseña los primeros de mañana. Eliges origen y destino y ves los próximos trenes. Para cada uno salen tres horas: *horario*, *app oficial* y *estimado*. También se indica cuándo llegarás más tarde (o antes) que lo que dice la app y el motivo, por ejemplo: «Espera en Veriña a que llegue el 70210».
 - **Estación.** Panel de salidas de una estación en los dos sentidos. Indica con qué tren se cruza cada uno y si está en el andén (con su vía).
 - **Mapa.** Mapa real (OpenStreetMap) con el trazado de la vía y los trenes moviéndose en su posición estimada, con su retraso. Si pulsas un tren ves su recorrido completo.
 - **Malla.** El gráfico que usan los ferroviarios para planificar la vía única: estaciones frente a hora. Se ven los cruces, las esperas y la diferencia con el horario oficial.
@@ -93,6 +93,11 @@ tests/              pruebas con el horario real del 23/09/2026 y posiciones real
 - Los trenes sin datos en tiempo real se suponen en hora. En la web aparecen marcados.
 - El mapa necesita internet para los planos. Todo lo demás funciona aunque no cargue el mapa.
 - El ordenador tiene que estar en hora de Madrid.
+
+## En internet (Render)
+
+- **No se duerme en horario de trenes:** en Render el programa se visita a sí mismo cada 10 minutos entre las 5:00 y las 0:45, así que no hay que esperar a que arranque. De madrugada se deja dormir para no gastar horas del plan gratis. Si lo abres a las 5:30 puede tardar un minuto la primera vez.
+- **Abre al instante:** la app guarda una copia en el móvil. Si el servidor está arrancando o no hay cobertura, enseña los últimos datos con un aviso y se actualiza sola en cuanto puede.
 
 ## Publicar mejoras (Render + GitHub)
 

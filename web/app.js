@@ -12,7 +12,12 @@ const hm = (m) => {
   m = Math.round(m);
   return String(Math.floor(m / 60) % 24).padStart(2, "0") + ":" + String(((m % 60) + 60) % 60).padStart(2, "0");
 };
-const ahora = () => (R ? R.ahora + (Date.now() - tRecibido) / 60000 : 0);
+const ahora = () => (!R ? 0 : R.ts ? R.ahora + (Date.now() / 1000 - R.ts) / 60 : R.ahora + (Date.now() - tRecibido) / 60000);
+const edadDatos = () => (R && R.ts ? Date.now() / 1000 - R.ts : 0);  // segundos desde que el servidor calculó
+async function pedir(url, ms = 12000) {
+  const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), ms);
+  try { return await (await fetch(url, { signal: ctl.signal })).json(); } finally { clearTimeout(t); }
+}
 const est = (k) => LINEA.estaciones[k];
 const nombreCorto = (n) => n.replace("Gijón-Sanz Crespo", "Gijón").replace("-Apeadero", " Apd.");
 const colorDir = (d) => (d > 0 ? "var(--ida)" : "var(--vta)");
@@ -34,43 +39,53 @@ function destinoCorto(t) { return nombreCorto(t.destino); }
 async function cargarLinea() {
   for (;;) {
     try {
-      const j = await (await fetch("/api/linea")).json();
+      const j = await pedir("/api/linea");
       if (!j.cargando) { LINEA = j; return; }
       $("chip-txt").textContent = "Preparando el horario…";
       $("avisos").innerHTML = j.error
         ? `<div class="aviso bad"><span>⚠</span><div><b>No se pudo cargar el horario de Renfe.</b> Se reintenta solo. (${esc(j.error)})</div></div>`
         : `<div class="aviso info"><span>ℹ</span><div>Descargando el horario oficial de Renfe. La primera vez tarda unos segundos…</div></div>`;
-    } catch (e) { $("chip-txt").textContent = "Conectando…"; }
+    } catch (e) {
+      $("chip-txt").textContent = "Despertando el servidor…";
+      $("avisos").innerHTML = `<div class="aviso info"><span>ℹ</span><div><b>Despertando el servidor.</b> En el plan gratis tarda hasta 1 minuto si llevaba rato sin usarse. No cierres la app.</div></div>`;
+    }
     await new Promise((r) => setTimeout(r, 1500));
   }
 }
 async function cargarEstado() {
   try {
-    const j = await (await fetch("/api/estado")).json();
+    const j = await pedir("/api/estado");
     if (j.cargando) { $("chip-txt").textContent = "Leyendo el tiempo real…"; return; }
+    if (R && j.ts && R.ts && j.ts < R.ts) return;  // copia guardada más vieja que lo que ya tenemos
     if (LINEA && j.fecha && j.fecha !== LINEA.fecha) { await cargarLinea(); iniciarSelectores(); }
     R = j; tRecibido = Date.now();
     pintarTrenesMapa._cruces = null;
     pintarTodo();
   } catch (e) {
-    const c = $("chip"); c.className = "chip sin_conexion"; $("chip-txt").textContent = "El programa no responde";
+    const c = $("chip"); c.className = "chip sin_conexion";
+    $("chip-txt").textContent = R ? "Reconectando…" : "Despertando el servidor…";
+    if (R) pintarEstado();
   }
 }
 async function cargarPrecision() {
-  try { PREC = await (await fetch("/api/precision")).json(); pintarPrecision(); } catch (e) { /* nada */ }
+  try { PREC = await pedir("/api/precision"); pintarPrecision(); } catch (e) { /* nada */ }
 }
 
 /* ---------------------------------------------------------------- estado y avisos */
 function pintarEstado() {
   const c = $("chip");
-  c.className = "chip " + R.calidad;
+  const viejo = edadDatos() > 90;
+  c.className = "chip " + (viejo ? "congelado" : R.calidad);
   const txt = { directo: `En directo · ${R.con_posicion} trenes localizados`,
                 congelado: "Renfe no actualiza · usando horario",
                 sin_conexion: "Sin conexión con Renfe · usando horario" }[R.calidad];
   const corto = { directo: "En directo", congelado: "Sin datos Renfe", sin_conexion: "Sin conexión" }[R.calidad];
-  $("chip-txt").innerHTML = `<span class="txt">${txt}</span><span class="corto">${corto}</span>`;
+  $("chip-txt").innerHTML = viejo ? `<span class="txt">Actualizando…</span><span class="corto">Actualizando…</span>`
+    : `<span class="txt">${txt}</span><span class="corto">${corto}</span>`;
   c.title = `Última lectura ${R.actualizado}` + (R.ts_feed ? ` · datos de Renfe de las ${R.ts_feed}` : "");
   let h = "";
+  if (viejo)
+    h += `<div class="aviso warn"><span>⏳</span><div><b>Datos de las ${esc(R.actualizado.slice(0, 5))}.</b> El servidor se está despertando o no hay conexión: en cuanto responda se actualiza solo.</div></div>`;
   if (R.calidad === "congelado")
     h += `<div class="aviso warn"><span>⚠</span><div><b>Los datos en tiempo real de Renfe están parados</b> (último dato ${R.ts_feed || "?"}). Mientras tanto se calcula con el horario, así que las esperas por cruces con trenes retrasados no se ven.</div></div>`;
   if (R.calidad === "sin_conexion")
@@ -101,35 +116,107 @@ function viajesEntre(o, d, lim = 6) {
   }
   return out.sort((a, b) => a.t.est_d[a.jo] - b.t.est_d[b.jo]).slice(0, lim);
 }
+/* favoritos y tiempo andando (se guardan en este dispositivo) */
+const favoritos = () => leer("favs", []);
+const andarA = (k) => +leer("andar." + est(k).id, 0) || 0;
+function pintarFavoritos() {
+  const o = +$("o").value, d = +$("d").value, fs = favoritos();
+  const es = fs.some((f) => f.o === est(o).id && f.d === est(d).id);
+  $("fav").textContent = es ? "★ Guardado" : "☆ Guardar trayecto";
+  $("fav").classList.toggle("on", es);
+  $("favoritos").innerHTML = fs.map((f, i) => {
+    const eo = LINEA.estaciones.find((e) => e.id === f.o), ed = LINEA.estaciones.find((e) => e.id === f.d);
+    if (!eo || !ed) return "";
+    const act = eo.k === o && ed.k === d;
+    return `<button type="button" class="fav-chip${act ? " act" : ""}" data-fav="${i}">${esc(nombreCorto(eo.nombre))} → ${esc(nombreCorto(ed.nombre))}</button>`;
+  }).join("");
+  $("favoritos").hidden = !fs.length;
+  $("andar").value = andarA(o) || "";
+}
+function alternarFavorito() {
+  const o = est(+$("o").value).id, d = est(+$("d").value).id;
+  let fs = favoritos();
+  if (fs.some((f) => f.o === o && f.d === d)) fs = fs.filter((f) => !(f.o === o && f.d === d));
+  else fs.push({ o, d });
+  guardar("favs", fs.slice(-6));
+  pintarFavoritos();
+}
+async function compartir(texto) {
+  try {
+    if (navigator.share) { await navigator.share({ text: texto }); return; }
+    await navigator.clipboard.writeText(texto);
+    aviso("Copiado. Pégalo en WhatsApp o donde quieras.");
+  } catch (e) { if (e && e.name !== "AbortError") aviso("No se pudo compartir"); }
+}
+function aviso(txt) {
+  const t = $("toast");
+  t.textContent = txt; t.hidden = false;
+  clearTimeout(aviso._t); aviso._t = setTimeout(() => { t.hidden = true; }, 2600);
+}
+const fiabilidad = (t) => ({ "posición": ["ok", "Posición en directo"], "Renfe": ["ok", "Dato de Renfe"],
+  "posición (aprox.)": ["warn", "Posición aproximada"] }[t.fuente] || null);
+
+async function pintarManana(o, d) {
+  const cont = $("viajes");
+  cont.innerHTML = `<div class="vacio">No quedan trenes hoy entre ${esc(est(o).nombre)} y ${esc(est(d).nombre)}.<br>Buscando los de mañana…</div>`;
+  try {
+    const j = await pedir(`/api/manana?o=${encodeURIComponent(est(o).id)}&d=${encodeURIComponent(est(d).id)}`);
+    if (+$("o").value !== o || +$("d").value !== d) return;
+    if (!j.trenes || !j.trenes.length) { cont.innerHTML = `<div class="vacio">No quedan trenes hoy ni hay trenes directos mañana entre estas estaciones.</div>`; return; }
+    const f = new Date(j.fecha + "T12:00:00").toLocaleDateString("es-ES", { weekday: "long", day: "numeric", month: "long" });
+    cont.innerHTML = `<div class="manana"><div class="manana-tit">Hoy ya no quedan trenes. Primeros de mañana, ${esc(f)}:</div>
+      <table class="tabla num"><thead><tr><th>Sale</th><th>Llega</th><th>Tren</th><th>Destino</th></tr></thead><tbody>` +
+      j.trenes.map((x) => `<tr><td class="e">${hm(x.sale)}</td><td>${hm(x.llega)}</td><td>${x.num}</td><td>${esc(nombreCorto(x.destino))}</td></tr>`).join("") +
+      `</tbody></table><p class="sub" style="margin:8px 0 0">Horario oficial. El tiempo real aparecerá cuando el tren empiece a circular.</p></div>`;
+  } catch (e) { cont.innerHTML = `<div class="vacio">No quedan trenes directos hoy entre ${esc(est(o).nombre)} y ${esc(est(d).nombre)}.</div>`; }
+}
+
 function pintarViaje() {
   const o = +$("o").value, d = +$("d").value;
+  pintarFavoritos();
   if (o === d) { $("viajes").innerHTML = `<div class="vacio">Elige dos estaciones distintas.</div>`; return; }
   const v = viajesEntre(o, d);
-  if (!v.length) { $("viajes").innerHTML = `<div class="vacio">No quedan trenes directos hoy entre ${esc(est(o).nombre)} y ${esc(est(d).nombre)}.</div>`; return; }
-  const now = ahora();
-  $("viajes").innerHTML = v.map(({ t, jo, jd, mot, antes }, i) => {
+  if (!v.length) {
+    if (pintarViaje._manana !== `${o}-${d}-${LINEA.fecha}`) { pintarViaje._manana = `${o}-${d}-${LINEA.fecha}`; pintarManana(o, d); }
+    return;
+  }
+  pintarViaje._manana = null;
+  const now = ahora(), andar = andarA(o);
+  let primero = true;
+  $("viajes").innerHTML = v.map(({ t, jo, jd, mot, antes }) => {
     const sal = t.est_d[jo], lle = t.est_a[jd], app = t.adif_a[jd], dif = lle - app;
     const falta = Math.round(sal - now);
     const cuando = falta <= 0 ? "sale ahora" : falta < 60 ? `sale en ${falta} min` : `sale a las ${hm(sal)}`;
     const cambiaSal = Math.abs(sal - t.prog_d[jo]) >= 1, cambiaLle = Math.abs(lle - t.prog_a[jd]) >= 1;
+    const salirCasa = sal - andar, margen = salirCasa - now;
+    const perdido = andar > 0 && margen < -0.5;
+    const destacado = !perdido && primero;
+    if (destacado) primero = false;
+    let casa = "";
+    if (andar > 0) casa = perdido
+      ? `<div class="casa perdido">🚶 Andando (${andar} min) ya no llegas a este tren</div>`
+      : `<div class="casa${margen <= 3 ? " prisa" : ""}">🚶 Sal de casa ${margen < 1 ? "<b>ya</b>" : `a las <b class="num">${hm(salirCasa)}</b> (en ${Math.round(margen)} min)`}</div>`;
     let aviso = "";
     if (t.con_datos && dif >= 1) aviso = `<div class="dif">La app oficial dirá <b class="num">${hm(app)}</b>. Llegarás sobre las <b class="num">${hm(lle)}</b> (<b>+${Math.round(dif)} min</b>).</div>`;
     else if (t.con_datos && dif <= -1) aviso = `<div class="dif bien">Llegarás antes de lo que dice la app oficial (${hm(app)}): recupera ${Math.round(-dif)} min con los márgenes del horario.</div>`;
     const lis = antes.map((m) => `<li class="antes">Antes de tu estación: ${esc(m.texto)} (+${Math.round(m.min)} min)</li>`)
       .concat(mot.map((m) => `<li>${esc(m.texto)} (+${Math.round(m.min)} min)</li>`)).join("");
-    return `<div class="tv ${i === 0 ? "primero" : ""}" data-tren="${t.id}" data-jo="${jo}" data-jd="${jd}">
+    const fia = fiabilidad(t);
+    const texto = `Voy en el tren ${t.num} de la C-4 (sale de ${nombreCorto(est(o).nombre)} a las ${hm(sal)}). Llego a ${nombreCorto(est(d).nombre)} sobre las ${hm(lle)}.`;
+    return `<div class="tv${destacado ? " primero" : ""}${perdido ? " perdido" : ""}" data-tren="${t.id}" data-jo="${jo}" data-jd="${jd}">
       <div class="tv-cab">
         <div>
           <div class="tv-tren">Tren ${t.num}<span class="tag ${t.dir > 0 ? "ida" : "vta"}">→ ${esc(destinoCorto(t))}</span>${t.con_datos ? tagRetraso(t.retraso) : `<span class="tag gris">${t.situacion.startsWith("Aún") ? "Programado" : "Sin datos"}</span>`}</div>
-          <div class="tv-sit">${esc(t.situacion)}${t.via ? ` · vía ${esc(t.via)}` : ""}</div>
+          <div class="tv-sit">${esc(t.situacion)}${t.via ? ` · vía ${esc(t.via)}` : ""}${fia ? ` · <span class="fia ${fia[0]}">${fia[1]}</span>` : ""}</div>
         </div>
         <div class="tv-grande"><div class="h num">${hm(lle)}</div><div class="l">llegada · ${cuando}</div></div>
-      </div>
+      </div>${casa}
       <div class="cmp num">
         <span></span><span class="c">Horario</span><span class="c">App oficial</span><span class="c">Estimado</span>
         <span class="c" style="align-self:center">Sale</span><span class="${cambiaSal ? "x" : ""}">${hm(t.prog_d[jo])}</span><span>${hm(t.adif_d[jo])}</span><span class="e">${hm(sal)}</span>
         <span class="c" style="align-self:center">Llega</span><span class="${cambiaLle ? "x" : ""}">${hm(t.prog_a[jd])}</span><span>${hm(app)}</span><span class="e">${hm(lle)}</span>
-      </div>${aviso}${lis ? `<ul class="motivos">${lis}</ul>` : ""}</div>`;
+      </div>${aviso}${lis ? `<ul class="motivos">${lis}</ul>` : ""}
+      <div class="tv-acciones"><button type="button" class="btn-mini" data-compartir="${esc(texto)}">Compartir llegada</button><span class="pp-sub">Toca la tarjeta para ver todo el recorrido</span></div></div>`;
   }).join("");
 }
 
@@ -659,6 +746,15 @@ function pintarTodo() {
 }
 
 document.addEventListener("click", (ev) => {
+  const comp = ev.target.closest("[data-compartir]");
+  if (comp) { ev.stopPropagation(); compartir(comp.dataset.compartir); return; }
+  const fav = ev.target.closest("[data-fav]");
+  if (fav) {
+    const f = favoritos()[+fav.dataset.fav];
+    const eo = LINEA.estaciones.find((e) => e.id === f.o), ed = LINEA.estaciones.find((e) => e.id === f.d);
+    if (eo && ed) { $("o").value = eo.k; $("d").value = ed.k; $("o").onchange(); }
+    return;
+  }
   const el = ev.target.closest("[data-tren]");
   if (el && !ev.target.closest("#cajon")) abrirTren(el.dataset.tren, el.dataset.jo, el.dataset.jd);
 });
@@ -666,6 +762,12 @@ $("velo").onclick = cerrarTren;
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") cerrarTren(); });
 for (const b of document.querySelectorAll("nav.tabs button")) b.onclick = () => irA(b.dataset.tab);
 $("o").onchange = $("d").onchange = () => { guardar("o", +$("o").value); guardar("d", +$("d").value); pintarViaje(); };
+$("fav").onclick = alternarFavorito;
+$("andar").onchange = $("andar").oninput = () => {
+  const v = Math.max(0, Math.min(90, Math.round(+$("andar").value || 0)));
+  guardar("andar." + est(+$("o").value).id, v);
+  pintarViaje();
+};
 $("invertir").onclick = () => { const a = $("o").value; $("o").value = $("d").value; $("d").value = a; $("o").onchange(); };
 $("est").onchange = () => { guardar("est", +$("est").value); pintarEstacion(); };
 $("ver-prog").onchange = pintarMalla;
@@ -704,6 +806,12 @@ function prepararIphone() {
   await cargarEstado();
   irA(["viaje", "estacion", "mapa", "malla", "cruces", "precision", "info"].includes(hash) ? hash : "viaje");
   setInterval(cargarEstado, 15000);
+  setInterval(() => { if (tabActual === "viaje" && R && document.activeElement !== $("andar")) pintarViaje(); }, 20000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) cargarEstado(); });
+  window.addEventListener("pageshow", () => cargarEstado());
+  if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost")) {
+    navigator.serviceWorker.register("/sw.js").catch(() => {});
+  }
   setInterval(() => { if (tabActual === "precision") cargarPrecision(); }, 300000);
   setInterval(() => {
     $("reloj").textContent = new Date().toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit", second: "2-digit" });

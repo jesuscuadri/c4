@@ -202,3 +202,38 @@ body.mapa-grande #mapa{flex:1;height:auto;border-radius:0;border:0}
 .lejos .tren-m.ida .tm-etq{top:-22px}.lejos .tren-m.vta .tm-etq{top:6px}
 .lejos .cruce-m,.lejos .hora-parada{display:none}
 @media (max-width:760px){#tab-mapa .panel>.sub{display:none}#tab-mapa .panel>h2{margin-bottom:8px}#mapa{height:calc(100dvh - 200px)}}
+
+/* ---- v2.1: favoritos, andar, compartir, mañana, barra inferior ---- */
+.favs{display:flex;gap:8px;overflow-x:auto;scrollbar-width:none;margin-bottom:12px;padding-bottom:2px}
+.favs::-webkit-scrollbar{display:none}
+.fav-chip{flex:0 0 auto;border:1px solid var(--bd2);background:var(--panel2);color:var(--tx);border-radius:99px;padding:6px 12px;font-weight:700;font-size:13px;cursor:pointer;white-space:nowrap}
+.fav-chip.act{background:var(--c4);border-color:var(--c4);color:#fff}
+.viaje-opc{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center;margin-top:10px;font-size:13.5px;color:var(--tx2)}
+.btn-mini{border:1px solid var(--bd2);background:var(--panel2);color:var(--tx);border-radius:9px;padding:6px 11px;font-weight:700;font-size:13px;cursor:pointer}
+.btn-mini.on{color:var(--c4);border-color:color-mix(in srgb,var(--c4) 50%,var(--bd2))}
+.andar{display:inline-flex;align-items:center;gap:6px}
+.andar input{width:56px;font-size:16px;padding:5px 8px;border-radius:8px;border:1px solid var(--bd2);background:var(--panel2);color:var(--tx);text-align:center}
+.casa{margin-top:10px;font-size:14px;color:var(--tx);background:var(--infobg);border-radius:9px;padding:7px 11px}
+.casa.prisa{background:var(--warnbg);color:var(--warn)}
+.casa.perdido{background:var(--bd);color:var(--tx2)}
+.tv.perdido{opacity:.55}
+.tv-acciones{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px}
+.fia{font-weight:700}.fia.ok{color:var(--ok)}.fia.warn{color:var(--warn)}
+.manana{padding:4px 0}.manana-tit{font-weight:700;margin-bottom:8px}
+.toast{position:fixed;left:50%;bottom:calc(90px + env(safe-area-inset-bottom));transform:translateX(-50%);background:var(--tx);color:var(--panel);padding:10px 16px;border-radius:12px;font-weight:600;font-size:14px;z-index:3000;box-shadow:0 6px 20px rgba(0,0,0,.3);max-width:calc(100% - 32px)}
+.ico{display:none}.l-corto{display:none}
+@media (max-width:760px){
+  nav.tabs{position:fixed;left:0;right:0;bottom:0;z-index:1100;max-width:none;margin:0;background:color-mix(in srgb,var(--panel) 94%,transparent);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-top:1px solid var(--bd);padding:4px 2px calc(4px + env(safe-area-inset-bottom));justify-content:space-between;gap:0;overflow:visible}
+  nav.tabs button{flex:1 1 0;min-width:0;display:flex;flex-direction:column;align-items:center;gap:2px;padding:5px 0 3px;font-size:10.5px;font-weight:600;border:0;color:var(--mut)}
+  nav.tabs button[aria-selected=true]{color:var(--c4);border:0}
+  .ico{display:block;width:23px;height:23px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+  .l-largo{display:none}.l-corto{display:inline}
+  main{padding-bottom:calc(86px + env(safe-area-inset-bottom))}
+  .top{border-bottom:1px solid var(--bd);backdrop-filter:none;-webkit-backdrop-filter:none;background:var(--bg)}
+  .top-in{flex-wrap:nowrap;padding-bottom:9px}
+  .reloj{display:none}
+  body.mapa-grande nav.tabs{display:none}
+  #mapa{height:calc(100dvh - 215px - env(safe-area-inset-top) - env(safe-area-inset-bottom))}
+  .viaje-opc{font-size:13px}
+  .cajon{padding-bottom:calc(40px + env(safe-area-inset-bottom))}
+}
