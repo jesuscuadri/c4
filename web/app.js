@@ -218,6 +218,37 @@ function pintarViaje() {
       </div>${aviso}${lis ? `<ul class="motivos">${lis}</ul>` : ""}
       <div class="tv-acciones"><button type="button" class="btn-mini" data-compartir="${esc(texto)}">Compartir llegada</button><span class="pp-sub">Toca la tarjeta para ver todo el recorrido</span></div></div>`;
   }).join("");
+  pintarBusEnlace(d);
+}
+
+/* ---------------------------------------------------------------- enlace con el bus (EMTUSA) */
+let BUS = {};   // cache por estación: {k:{ts,data}}
+async function pintarBusEnlace(d) {
+  const cont = $("bus-enlace"), e = est(d);
+  if (!e || e.lat == null) { cont.hidden = true; return; }
+  const cache = BUS[d];
+  if (cache && Date.now() - cache.ts < 20000) return dibujarBus(d, cache.data);
+  try {
+    const j = await pedir(`/api/bus/enlace?lat=${e.lat}&lon=${e.lon}`, 9000);
+    BUS[d] = { ts: Date.now(), data: j };
+    if (+$("d").value === d) dibujarBus(d, j);
+  } catch (err) { /* si falla, el bus simplemente no se muestra */ }
+}
+const andandoMin = (m) => Math.max(1, Math.round(m / 75));   // ~4,5 km/h
+function dibujarBus(d, j) {
+  const cont = $("bus-enlace");
+  if (!j || !j.paradas || !j.paradas.length) { cont.hidden = true; return; }
+  const nom = nombreCorto(est(d).nombre);
+  const parada = (p) => {
+    const lls = (p.llegadas || []).filter((l) => l.minutos != null).slice(0, 4);
+    const chips = lls.length ? lls.map((l) => `<span class="bus-linea" style="background:${esc(l.color)}" title="${esc(l.nombre_linea)} → ${esc(l.destino)}">${esc(l.linea)}<b>${l.minutos <= 0 ? "ya" : l.minutos + "′"}</b></span>`).join("")
+      : `<span class="pp-sub">sin autobuses ahora</span>`;
+    return `<div class="bus-parada"><div class="bus-p-cab"><b>${esc(p.nombre)}</b><span class="pp-sub">${andandoMin(p.metros)} min andando · ${p.metros} m</span></div><div class="bus-chips">${chips}</div></div>`;
+  };
+  cont.hidden = false;
+  cont.innerHTML = `<div class="panel bus-panel"><div class="bus-cab"><b>🚌 Autobuses al llegar a ${esc(nom)}</b><span class="pp-sub">en directo · ahora mismo</span></div>
+    ${j.paradas.map(parada).join("")}
+    <p class="sub" style="margin:8px 0 0">Los minutos son los de <b>ahora</b>; cuando tu tren esté llegando, vuelve a mirar para ver el autobús que vas a pillar. Datos: EMTUSA.</p></div>`;
 }
 
 /* ---------------------------------------------------------------- panel de estación */

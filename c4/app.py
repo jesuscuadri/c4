@@ -17,9 +17,11 @@ from .estimador import Estimador
 from .historial import Precision, aprender_tiempos, guardar_observaciones
 from .linea import Linea
 from .tiemporeal import TiempoReal
-from .util import WEB, http_get
+from .emtusa import Emtusa
+from .util import RAIZ, WEB, http_get
+from .emtusa import Emtusa
 
-VERSION = "2.1"
+VERSION = "2.2"
 
 
 class App:
@@ -39,6 +41,12 @@ class App:
         self.url_movil = None
         self.error_inicio = None
         self._manana = (None, None)
+        self.bus = Emtusa(cfg.get("bus", True))
+        try:
+            self.bus = Emtusa()
+        except Exception as e:  # noqa: BLE001
+            print('Aviso: no se pudo cargar la red de bus:', e)
+            self.bus = None
 
     def preparar(self):
         hoy = date.today()
@@ -182,6 +190,33 @@ def servir(app, abrir=True, en_red=False, publico=False):
                 return self._json(Precision.estadisticas())
             if ruta == "/api/ping":
                 return self._json({"ok": True, "hora": datetime.now().strftime("%H:%M:%S")})
+            if ruta == "/api/bus/red":
+                return self._json(app.bus.resumen_red() if app.bus else {"error": "sin datos de bus"})
+            if ruta == "/api/bus/cercanas":
+                q = parse_qs(urlparse(self.path).query)
+                try:
+                    return self._json({"paradas": app.bus.cercanas(float(q["lat"][0]), float(q["lon"][0]))})
+                except Exception as e:  # noqa: BLE001
+                    return self._json({"error": str(e), "paradas": []})
+            if ruta == "/api/bus/buscar":
+                q = parse_qs(urlparse(self.path).query)
+                return self._json({"paradas": app.bus.buscar_paradas(q.get("q", [""])[0]) if app.bus else []})
+            if ruta.startswith("/api/bus/parada/"):
+                try:
+                    return self._json(app.bus.llegadas(ruta.rsplit("/", 1)[1]))
+                except Exception as e:  # noqa: BLE001
+                    return self._json({"error": str(e), "llegadas": []})
+            if ruta == "/bus" or ruta == "/bus/":
+                ruta = "/bus/index.html"
+            if ruta == "/api/bus/enlace":
+                q = parse_qs(urlparse(self.path).query)
+                try:
+                    lat = float(q.get("lat", [""])[0]); lon = float(q.get("lon", [""])[0])
+                    return self._json(app.bus.enlace(lat, lon, app.cfg.get("bus_radio_m", 550)))
+                except Exception as e:  # noqa: BLE001
+                    return self._json({"disponible": False, "error": str(e), "paradas": []})
+            if ruta.startswith("/api/bus/parada/"):
+                return self._json(app.bus.llegadas(ruta.rsplit("/", 1)[-1]))
             if ruta == "/api/manana":
                 q = parse_qs(urlparse(self.path).query)
                 try:
@@ -190,8 +225,14 @@ def servir(app, abrir=True, en_red=False, publico=False):
                     return self._json({"error": str(e), "trenes": []})
             if ruta == "/":
                 ruta = "/index.html"
-            fichero = os.path.normpath(os.path.join(WEB, ruta.lstrip("/")))
-            if not fichero.startswith(os.path.normpath(WEB)) or not os.path.isfile(fichero):
+            if ruta.startswith("/bus/"):
+                raiz = os.path.join(RAIZ, "web-bus")
+                fichero = os.path.normpath(os.path.join(raiz, ruta[len("/bus/"):]))
+                base = os.path.normpath(raiz)
+            else:
+                fichero = os.path.normpath(os.path.join(WEB, ruta.lstrip("/")))
+                base = os.path.normpath(WEB)
+            if not fichero.startswith(base) or not os.path.isfile(fichero):
                 return self._enviar(b"No encontrado", "text/plain; charset=utf-8", 404)
             tipo = mimetypes.guess_type(fichero)[0] or "application/octet-stream"
             if tipo.startswith("text/") or tipo.endswith("javascript"):

@@ -31,6 +31,8 @@ CONFIG_DEFECTO = {
     "recuperacion": 0.0,                # fracción de marcha recuperable si va con retraso
     "usar_tiempos_aprendidos": True,
     "guardar_historial": True,
+    "bus": True,                        # enlace con el autobus urbano de Gijon (EMTUSA)
+    "bus_radio_m": 550,                 # radio para buscar paradas cerca de una estacion
     "datos_viejos_s": 300,              # tiempo real más antiguo que esto se ignora
 }
 

@@ -37,6 +37,12 @@ La primera vez descarga el horario oficial de Renfe (unos 2 MB) y lo guarda en `
 - **Precisión.** Mide sola si el programa acierta más que la app oficial. Compara las estimaciones hechas 5, 10, 20 y 30 minutos antes con la hora real de llegada.
 - **Cómo funciona.** Explicación del modelo y lista de apartaderos.
 
+### Enlace con el autobús urbano (EMTUSA)
+
+En **Mi viaje**, cuando el destino es una estación de Gijón, debajo de los trenes aparece **«Autobuses al llegar a…»**: las paradas de EMTUSA a pie de estación, cuántos minutos se tarda andando hasta cada una, y los autobuses que están por llegar con su línea y sus minutos, **en tiempo real**. Así encadenas tren + bus.
+
+Los minutos del bus son los de *ahora*: cuando tu tren esté a punto de llegar, vuelve a mirar para ver el autobús que vas a pillar. Usa la API pública de EMTUSA (`emtusasiri.pub.gijon.es`, la misma que su app oficial). Si esa API no responde, el tren sigue funcionando igual y el bus simplemente no se muestra. Se puede apagar con `"bus": false` en `config.json`.
+
 ## Cómo calcula
 
 1. **Horario oficial.** GTFS de Renfe Cercanías, del que se queda con los trenes de la C-4 de hoy y el trazado de la vía.
@@ -82,6 +88,7 @@ c4/linea.py         estaciones, apartaderos, cruces, rotaciones
 c4/tiemporeal.py    lectura del tiempo real de Renfe
 c4/estimador.py     simulación de la vía única
 c4/historial.py     observaciones, aprendizaje y medida de precisión
+c4/emtusa.py        autobús urbano de Gijón (EMTUSA) en tiempo real
 c4/app.py           servidor web local
 web/                interfaz (HTML, CSS, JS; el mapa usa Leaflet y OpenStreetMap)
 tests/              pruebas con el horario real del 23/09/2026 y posiciones reales de Renfe
