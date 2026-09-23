@@ -1,0 +1,5 @@
+cache/
+historial/
+__pycache__/
+*.pyc
+dist/

@@ -1,0 +1,11 @@
+{
+  "cruces": "fijos",
+  "umbral_cambio_cruce_min": 8,
+  "margen_cruce_min": 0.5,
+  "vuelta_minima_min": 4,
+  "rotacion_espera_max_min": 10,
+  "recuperacion": 0.0,
+  "estaciones_cruce_extra": [],
+  "estaciones_cruce_excluir": [],
+  "puerto": 8765
+}

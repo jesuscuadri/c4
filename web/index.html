@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#e93cac">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="C-4">
+<meta name="format-detection" content="telephone=no">
+<link rel="apple-touch-icon" href="icono-180.png">
+<link rel="manifest" href="manifest.json">
+<title>C-4 en tiempo real</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23e93cac'/%3E%3Ctext x='32' y='43' font-family='Arial' font-weight='700' font-size='28' fill='white' text-anchor='middle'%3EC4%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="estilos.css">
+</head>
+<body>
+<header class="top">
+  <div class="top-in">
+    <div class="marca">
+      <span class="pill-linea">C4</span>
+      <h1>Gijón – Cudillero <small>Cercanías Asturias · llegada real con cruces en vía única</small></h1>
+    </div>
+    <div class="estado">
+      <span class="chip" id="chip"><span class="dot"></span><span id="chip-txt">Cargando…</span></span>
+      <button class="btn" id="btn-iphone" hidden title="Abrir en el iPhone">📱 iPhone</button>
+      <span class="reloj num" id="reloj">--:--</span>
+    </div>
+  </div>
+  <nav class="tabs" role="tablist">
+    <button role="tab" data-tab="viaje" aria-selected="true">Mi viaje</button>
+    <button role="tab" data-tab="estacion">Estación</button>
+    <button role="tab" data-tab="mapa">Mapa</button>
+    <button role="tab" data-tab="malla">Malla</button>
+    <button role="tab" data-tab="cruces">Cruces</button>
+    <button role="tab" data-tab="precision">Precisión</button>
+    <button role="tab" data-tab="info">Cómo funciona</button>
+  </nav>
+</header>
+
+<main>
+  <div id="avisos"></div>
+
+  <section id="tab-viaje">
+    <div class="panel">
+      <div class="ruta">
+        <div class="campo"><label for="o">Desde</label><select id="o"></select></div>
+        <button class="btn btn-ico" id="invertir" title="Invertir sentido" aria-label="Invertir sentido">⇅</button>
+        <div class="campo"><label for="d">Hasta</label><select id="d"></select></div>
+      </div>
+      <div class="viajes" id="viajes"></div>
+    </div>
+  </section>
+
+  <section id="tab-estacion" hidden>
+    <div class="panel">
+      <div class="campo" style="max-width:360px"><label for="est">Estación</label><select id="est"></select></div>
+      <p class="sub" id="est-info" style="margin-top:8px"></p>
+      <div class="dos" id="panel-estacion"></div>
+    </div>
+  </section>
+
+  <section id="tab-mapa" hidden>
+    <div class="panel">
+      <h2>Mapa en tiempo real</h2>
+      <p class="sub">Posición estimada de cada tren, recalculada cada segundo. Pulsa un tren para ver su recorrido.</p>
+      <div id="mapa"></div>
+      <div class="leyenda">
+        <span><span class="bola" style="background:var(--ida)"></span>Hacia Cudillero / Avilés</span>
+        <span><span class="bola" style="background:var(--vta)"></span>Hacia Gijón</span>
+        <span><span class="bola" style="background:#fff;border:3px solid var(--c4)"></span>Estación con vía de cruce</span>
+        <span><span class="tag ok" style="margin:0">+0</span><span class="tag warn" style="margin:0">+4</span><span class="tag bad" style="margin:0">+9</span>retraso estimado</span>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-malla" hidden>
+    <div class="panel">
+      <h2>Malla de circulación</h2>
+      <p class="sub">Así se planifica una línea de vía única. Eje vertical: estaciones. Eje horizontal: hora. Cada línea es un tren. Los tramos horizontales son esperas y los cruces solo pueden darse en las estaciones en negrita.</p>
+      <div class="malla-ctl">
+        <div class="seg" id="ventana">
+          <button data-v="90" aria-pressed="false">1,5 h</button>
+          <button data-v="180" aria-pressed="true">3 h</button>
+          <button data-v="360" aria-pressed="false">6 h</button>
+        </div>
+        <label style="font-size:13px;color:var(--tx2)"><input type="checkbox" id="ver-prog" checked> Mostrar horario oficial</label>
+      </div>
+      <div id="malla" class="scroll-x"></div>
+      <div class="leyenda">
+        <span><svg width="26" height="8"><line x1="0" y1="4" x2="26" y2="4" stroke="var(--ida)" stroke-width="2.5"/></svg>Hacia Cudillero / Avilés</span>
+        <span><svg width="26" height="8"><line x1="0" y1="4" x2="26" y2="4" stroke="var(--vta)" stroke-width="2.5"/></svg>Hacia Gijón</span>
+        <span><svg width="26" height="8"><line x1="0" y1="4" x2="26" y2="4" stroke="var(--mut)" stroke-dasharray="3 3"/></svg>Horario oficial</span>
+        <span><svg width="12" height="12"><circle cx="6" cy="6" r="4" fill="none" stroke="var(--warn)" stroke-width="2"/></svg>Cruce</span>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-cruces" hidden>
+    <div class="panel">
+      <h2>Próximos cruces</h2>
+      <p class="sub">Dónde y cuándo se cruzan los trenes, y cuánto espera cada uno. En naranja, los cruces que añaden retraso respecto al horario.</p>
+      <div class="scroll-x" id="lista-cruces"></div>
+    </div>
+  </section>
+
+  <section id="tab-precision" hidden>
+    <div class="panel">
+      <h2>¿Acierta más que la app oficial?</h2>
+      <p class="sub">Mientras el programa está abierto, anota lo que estimaba 5, 10, 20 y 30 minutos antes de cada llegada. Cuando el tren llega de verdad, compara esa estimación con la de la app oficial (horario + retraso actual).</p>
+      <div id="precision"></div>
+    </div>
+  </section>
+
+  <section id="tab-info" hidden>
+    <div class="panel prosa" id="info"></div>
+  </section>
+
+  <p class="pie" id="pie"></p>
+</main>
+
+<aside class="cajon" id="cajon" aria-hidden="true"></aside>
+<div class="modal" id="modal-iphone" hidden>
+  <div class="modal-caja">
+    <button class="cerrar" id="cerrar-iphone" aria-label="Cerrar" style="float:right">×</button>
+    <h2 style="margin:0 0 6px;font-size:18px">Abrir en el iPhone</h2>
+    <p class="sub" style="margin:0 0 12px">El iPhone tiene que estar en la <b>misma wifi</b> que este ordenador, y el programa abierto aquí.</p>
+    <div id="qr" style="background:#fff;padding:12px;border-radius:12px;width:max-content;margin:0 auto"></div>
+    <p style="text-align:center;font-weight:700;margin:10px 0 14px" class="num" id="url-movil"></p>
+    <ol class="pasos">
+      <li>Abre la <b>Cámara</b> del iPhone y apunta al código. Toca el enlace que aparece.</li>
+      <li>En Safari, pulsa <b>Compartir</b> (el cuadrado con la flecha) → <b>Añadir a pantalla de inicio</b>.</li>
+      <li>Te queda un icono <b>C-4</b> que se abre a pantalla completa, como una app.</li>
+    </ol>
+  </div>
+</div>
+<div class="velo" id="velo"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js" defer></script>
+<script src="app.js" defer></script>
+</body>
+</html>
