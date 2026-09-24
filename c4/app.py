@@ -13,13 +13,13 @@ from urllib.parse import parse_qs, urlparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import gtfs
+from . import planificador
 from .estimador import Estimador
 from .historial import Precision, aprender_tiempos, guardar_observaciones
 from .linea import Linea
 from .tiemporeal import TiempoReal
 from .emtusa import Emtusa
-from .util import RAIZ, WEB, http_get
-from .emtusa import Emtusa
+from .util import RAIZ, WEB, http_get, ahora_min
 
 VERSION = "2.2"
 
@@ -41,11 +41,13 @@ class App:
         self.url_movil = None
         self.error_inicio = None
         self._manana = (None, None)
-        self.bus = Emtusa(cfg.get("bus", True))
         try:
-            self.bus = Emtusa()
+            self.bus = Emtusa(cfg.get("bus", True))
+            if self.bus.red_ok:
+                print("Red de bus EMTUSA: %d líneas · %d paradas" % (
+                    len(self.bus.lineas_d), len(self.bus.paradas_d)))
         except Exception as e:  # noqa: BLE001
-            print('Aviso: no se pudo cargar la red de bus:', e)
+            print("Aviso: no se pudo cargar la red de bus:", e)
             self.bus = None
 
     def preparar(self):
@@ -132,6 +134,39 @@ class App:
         out.sort(key=lambda x: x["sale"])
         return {"fecha": dia.isoformat(), "trenes": out[:4]}
 
+    def geocode(self, q):
+        with self.lock:
+            linea = self.linea
+        p = planificador.geocodificar(q, linea, self.bus)
+        return p or {"error": "No encontré «%s». Prueba con el nombre de una parada, una estación o un sitio." % q}
+
+    def resolver(self, texto, lat, lon, nombre):
+        if lat and lon:
+            try:
+                return {"lat": float(lat), "lon": float(lon), "nombre": nombre or "Tu ubicación", "tipo": "gps"}
+            except ValueError:
+                pass
+        if texto:
+            with self.lock:
+                linea = self.linea
+            return planificador.geocodificar(texto, linea, self.bus)
+        return None
+
+    def ir(self, origen, destino):
+        if not origen:
+            return {"ok": False, "error": "Falta el origen.", "cual": "origen"}
+        if not destino:
+            return {"ok": False, "error": "Falta el destino.", "cual": "destino"}
+        with self.lock:
+            linea, res = self.linea, self.res
+        if linea is None or res is None:
+            return {"ok": False, "cargando": True}
+        try:
+            return planificador.planificar(linea, res, self.bus, origen, destino, ahora_min())
+        except Exception as e:  # noqa: BLE001
+            traceback.print_exc()
+            return {"ok": False, "error": "No pude calcular la ruta (%s)." % e}
+
     def bucle(self):
         while True:
             try:
@@ -217,6 +252,19 @@ def servir(app, abrir=True, en_red=False, publico=False):
                     return self._json({"disponible": False, "error": str(e), "paradas": []})
             if ruta.startswith("/api/bus/parada/"):
                 return self._json(app.bus.llegadas(ruta.rsplit("/", 1)[-1]))
+            if ruta == "/api/geocode":
+                q = parse_qs(urlparse(self.path).query)
+                return self._json(app.geocode(q.get("q", [""])[0]))
+            if ruta == "/api/ir":
+                q = parse_qs(urlparse(self.path).query)
+                g = lambda k: q.get(k, [""])[0]  # noqa: E731
+                origen = app.resolver(g("origen"), g("olat"), g("olon"), g("oname"))
+                destino = app.resolver(g("destino"), g("dlat"), g("dlon"), g("dname"))
+                if g("origen") and not origen:
+                    return self._json({"ok": False, "error": "No encontré el origen «%s»." % g("origen"), "cual": "origen"})
+                if g("destino") and not destino:
+                    return self._json({"ok": False, "error": "No encontré el destino «%s»." % g("destino"), "cual": "destino"})
+                return self._json(app.ir(origen, destino))
             if ruta == "/api/manana":
                 q = parse_qs(urlparse(self.path).query)
                 try:

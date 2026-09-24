@@ -810,6 +810,89 @@ for (const b of document.querySelectorAll("#ventana button")) b.onclick = () => 
 window.addEventListener("hashchange", () => { const h = location.hash.slice(1); if (h && h !== tabActual && $("tab-" + h)) irA(h); });
 window.addEventListener("resize", () => { if (tabActual === "malla" && R) pintarMalla(); });
 
+/* ---------------------------------------------------------------- Ir a… (planificador puerta a puerta) */
+let GPS = null;
+const MI_UBIC = "📍 Mi ubicación";
+
+async function planificar() {
+  const o = $("ir-o").value.trim(), d = $("ir-d").value.trim();
+  if (!d) { $("ir-d").focus(); return; }
+  let url = "/api/ir?destino=" + encodeURIComponent(d);
+  if (GPS && (!o || o === MI_UBIC)) url += `&olat=${GPS[0]}&olon=${GPS[1]}`;
+  else if (o) url += "&origen=" + encodeURIComponent(o);
+  else { $("ir-o").focus(); return; }
+  $("ir-resultado").innerHTML = `<div class="ir-cargando">Buscando la mejor combinación…</div>`;
+  $("ir-buscar").disabled = true;
+  try { pintarPlan(await pedir(url, 16000)); }
+  catch (e) { pintarPlan({ ok: false, error: "No pude conectar con el servidor. Prueba otra vez en un momento." }); }
+  finally { $("ir-buscar").disabled = false; }
+}
+
+function usarGps() {
+  if (!navigator.geolocation) { aviso("Este dispositivo no permite la ubicación."); return; }
+  const inp = $("ir-o"); inp.value = "Localizando…";
+  navigator.geolocation.getCurrentPosition((pos) => {
+    GPS = [pos.coords.latitude, pos.coords.longitude]; inp.value = MI_UBIC;
+    if ($("ir-d").value.trim()) planificar();
+  }, (err) => {
+    inp.value = ""; GPS = null;
+    aviso(err.code === 1 ? "Permiso de ubicación denegado." : "No se pudo obtener la ubicación.");
+  }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 });
+}
+
+function pintarPlan(p) {
+  const box = $("ir-resultado");
+  if (!p) { box.innerHTML = ""; return; }
+  if (p.cargando) { box.innerHTML = `<div class="ir-cargando">El horario del día aún se está cargando. Prueba en unos segundos.</div>`; return; }
+  if (!p.ok) {
+    box.innerHTML = `<div class="ir-error">${esc(p.error || "No encontré una ruta.")}</div>` +
+      (p.avisos || []).map((a) => `<div class="ir-aviso">${esc(a)}</div>`).join("");
+    return;
+  }
+  const dur = p.duracion != null ? `${Math.round(p.duracion)} min` : "";
+  let h = `<div class="ir-cab">
+      <div class="ir-od"><span class="ir-de">${esc(p.origen.nombre)}</span><span class="ir-fl">→</span><span class="ir-a">${esc(p.destino.nombre)}</span></div>
+      <div class="ir-tot">${p.solo_urbano ? "" : `Sales ${hm(p.sale)} · `}llegas <b>${p.llega_hm || "--:--"}</b>${dur ? ` · ${dur}` : ""}</div>
+    </div><ol class="ir-etapas">`;
+  for (const e of p.etapas) {
+    if (e.tipo === "andar")
+      h += `<li class="et andar"><span class="et-ico">🚶</span><div class="et-cuerpo">
+        <div class="et-t">Andar ${e.min} min <span class="et-sub2">· ${e.metros} m</span></div>
+        <div class="et-sub">${esc(e.desde)} → ${esc(e.hasta)}</div></div></li>`;
+    else if (e.tipo === "bus") {
+      const sale = e.sale_en != null
+        ? `<span class="et-min ok">sale en ${e.sale_en} min</span>`
+        : `<span class="et-min aprox">según horario</span>`;
+      h += `<li class="et bus"><span class="et-ico">🚌</span><div class="et-cuerpo">
+        <div class="et-t"><span class="bus-chip" style="background:${esc(e.color)}">${esc(e.linea)}</span> hacia ${esc(e.destino)} ${sale}</div>
+        <div class="et-sub">Sube en <b>${esc(e.subir)}</b> · baja en <b>${esc(e.bajar)}</b> · ${e.paradas} paradas (~${e.min} min)</div></div></li>`;
+    } else if (e.tipo === "tren") {
+      h += `<li class="et tren"><span class="et-ico">🚆</span><div class="et-cuerpo">
+        <div class="et-t">Tren <b>C-4</b> ${esc(e.num)}${e.retraso > 0 ? ` <span class="tm-r warn">+${e.retraso}</span>` : ""}</div>
+        <div class="et-horas"><span>${hm(e.sale)} <b>${esc(e.desde)}</b></span><span class="et-fl">→</span><span>${hm(e.llega)} <b>${esc(e.hasta)}</b></span></div>
+        ${e.espera_estacion > 0 ? `<div class="et-sub">Espera en la estación ${Math.round(e.espera_estacion)} min hasta la salida</div>` : ""}
+        ${(e.motivos || []).map((m) => `<div class="et-cruce">⇄ ${esc(m.texto)} <span class="et-min warn2">+${m.min}</span></div>`).join("")}
+      </div></li>`;
+    }
+  }
+  h += `</ol>`;
+  (p.avisos || []).forEach((a) => { h += `<div class="ir-aviso">${esc(a)}</div>`; });
+  h += `<p class="ir-nota">El tren lleva la hora real (con cruces en vía única). El bus urbano usa los minutos en directo de EMTUSA cuando los hay; si no, una estimación por horario.</p>`;
+  box.innerHTML = h;
+}
+
+$("ir-buscar").onclick = planificar;
+$("ir-gps").onclick = usarGps;
+$("ir-o").addEventListener("input", () => { if ($("ir-o").value !== MI_UBIC) GPS = null; });
+$("ir-swap").onclick = () => {
+  const a = $("ir-o").value, eraGps = GPS && a === MI_UBIC;
+  $("ir-o").value = $("ir-d").value; $("ir-d").value = eraGps ? "" : a; GPS = null;
+};
+for (const inp of [$("ir-o"), $("ir-d")])
+  inp.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); planificar(); } });
+for (const b of document.querySelectorAll("#ir-ejemplos button"))
+  b.onclick = () => { GPS = null; $("ir-o").value = b.dataset.o; $("ir-d").value = b.dataset.d; planificar(); };
+
 function prepararIphone() {
   const url = LINEA && LINEA.url_movil;
   const esMovil = /iPhone|iPad|Android/i.test(navigator.userAgent);
@@ -835,7 +918,7 @@ function prepararIphone() {
   prepararIphone();
   const hash = location.hash.slice(1);
   await cargarEstado();
-  irA(["viaje", "estacion", "mapa", "malla", "cruces", "precision", "info"].includes(hash) ? hash : "viaje");
+  irA(["ir", "viaje", "estacion", "mapa", "malla", "cruces", "precision", "info"].includes(hash) ? hash : "ir");
   setInterval(cargarEstado, 15000);
   setInterval(() => { if (tabActual === "viaje" && R && document.activeElement !== $("andar")) pintarViaje(); }, 20000);
   document.addEventListener("visibilitychange", () => { if (!document.hidden) cargarEstado(); });

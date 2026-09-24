@@ -9,9 +9,20 @@ import urllib.request
 from datetime import datetime
 
 RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CACHE = os.path.join(RAIZ, "cache")
-HIST = os.path.join(RAIZ, "historial")
+# Carpeta de datos persistentes (historial de precisión y tiempos aprendidos).
+# En Render el disco normal es TEMPORAL: se borra en cada despliegue o reinicio, y por eso
+# la precisión "se reiniciaba". Si montas un disco persistente (p. ej. en /var/data) y pones
+# la variable de entorno C4_DATOS=/var/data, el historial se conserva entre actualizaciones.
+DATOS = os.environ.get("C4_DATOS")
+CACHE = os.path.join(DATOS or RAIZ, "cache")
+HIST = os.path.join(DATOS or RAIZ, "historial")
 WEB = os.path.join(RAIZ, "web")
+if DATOS:
+    try:
+        os.makedirs(HIST, exist_ok=True)
+        os.makedirs(CACHE, exist_ok=True)
+    except OSError:
+        pass
 
 CONFIG_DEFECTO = {
     "linea": "C4",
