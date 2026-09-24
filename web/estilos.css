@@ -406,3 +406,7 @@ body.mapa-grande #mapa{flex:1;height:auto;border-radius:0;border:0}
 .ge-fila:hover{background:var(--panel2)}
 .ge-fila.mio{outline:2px solid rgba(245,179,1,.8)}
 .ge-fila.sel{background:color-mix(in srgb,var(--c4) 18%,var(--panel))}
+/* número del tren: discreto, solo para cuadrarlo con Renfe */
+.num-t{font-size:11px;color:var(--mut);font-weight:500;margin-left:6px;font-variant-numeric:tabular-nums;letter-spacing:.2px}
+h2 .num-t{font-size:13px}
+.tv-tren .bola,.mt-l .bola{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;vertical-align:1px}

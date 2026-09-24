@@ -106,7 +106,7 @@ class TestEscenarios(Base):
         t, jd = f["tren"], f["jd"]
         self.assertAlmostEqual(t["adif_a"][jd], h("10:18"), delta=0.6)   # lo que diría la app
         self.assertGreaterEqual(t["est_a"][jd], h("10:21"))               # la realidad
-        self.assertTrue(any("Veriña" in m["texto"] and "70210" in m["texto"] for m in f["motivos"]))
+        self.assertTrue(any("Veriña" in m["texto"] and m["con"] == "70210" for m in f["motivos"]))
 
     def test_tren_contrario_retrasado_retiene_al_que_sale(self):
         rt = TiempoReal(self.cfg)

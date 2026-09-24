@@ -267,17 +267,17 @@ class Estimador:
             for j, ((tipo, otro, oj, info), espera) in sorted(por_que[v.id].items()):
                 sitio = L.nombre[v.k[j]]
                 if tipo == "cruce":
-                    txt = "Espera en %s a que llegue el %s (hacia %s)" % (sitio, otro.num, L.nombre[otro.k[-1]])
+                    txt = "Espera en %s a que llegue el tren que va a %s" % (sitio, _corto(L.nombre[otro.k[-1]]))
                     if info == "movido":
                         txt += " · cruce trasladado"
                 elif tipo == "tramo":
-                    txt = "Espera en %s a que llegue el %s, que viene de frente por la vía única" % (
-                        sitio, otro.num)
+                    txt = "Espera en %s a que llegue el tren que viene de frente por la vía única (va a %s)" % (
+                        sitio, _corto(L.nombre[otro.k[-1]]))
                 elif tipo == "seguimiento":
-                    txt = "Va detrás del %s: no sale de %s hasta que este llegue a %s" % (
-                        otro.num, sitio, L.nombre[info])
+                    txt = "Va detrás de otro tren (el que va a %s): no sale de %s hasta que ese llegue a %s" % (
+                        _corto(L.nombre[otro.k[-1]]), sitio, _corto(L.nombre[info]))
                 else:
-                    txt = "Espera a que llegue el %s, que es el tren que hace este servicio" % otro.num
+                    txt = "Espera a que llegue el tren que viene de %s: es el que hace este servicio" % _corto(L.nombre[otro.k[0]])
                 motivos.append({"j": j, "k": v.k[j], "texto": txt, "min": round(espera, 1), "tipo": tipo,
                                 "con": otro.num})
             p = rt.pos.get(v.id)
@@ -322,6 +322,10 @@ class Estimador:
                                       "espera": round(espera_b, 1), "retraso_extra": extra[b.num]}})
         cruces.sort(key=lambda c: c["hora"])
         return {"ahora": round(ahora, 3), "trenes": trenes, "cruces": cruces}
+
+
+def _corto(nombre):
+    return nombre.replace("Gijón-Sanz Crespo", "Gijón").replace("-Apeadero", " Apd.")
 
 
 def viajes_entre(res, origen, destino, limite=6):
