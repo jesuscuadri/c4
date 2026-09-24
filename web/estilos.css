@@ -386,3 +386,16 @@ body.mapa-grande #mapa{flex:1;height:auto;border-radius:0;border:0}
 .btn-bus{gap:5px}
 @media (max-width:600px){#malla .malla-ejes svg text{font-size:10.5px}}
 #malla .tr .cab{fill:none;stroke-width:2.2;stroke-dasharray:2 5;stroke-linecap:round}
+
+/* ============================ Mapa mejorado ============================ */
+.tm-etq{transition:transform .25s ease}
+.tm-mio{color:#f5b301;font-size:12px;margin-right:-1px}
+.tren-m.mio .tm-punto{width:26px;height:26px;left:-13px;top:-13px;box-shadow:0 0 0 4px rgba(245,179,1,.55),0 1px 6px rgba(0,0,0,.5)}
+.tren-m.mio .tm-etq{outline:2px solid rgba(245,179,1,.8)}
+.tren-m.mio.sel .tm-punto{box-shadow:0 0 0 5px rgba(245,179,1,.6),0 0 0 9px color-mix(in srgb,var(--c4) 30%,transparent)}
+.leaflet-control-layers-base label{font-size:13px;padding:2px 0}
+
+.etq-est{transition:opacity .2s}
+.etq-est.tapada{opacity:0!important;pointer-events:none}
+.leaflet-control-attribution{font-size:10px!important;line-height:1.3}
+@media (max-width:600px){.leaflet-control-attribution{font-size:8.5px!important;max-width:70vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}

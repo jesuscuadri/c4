@@ -336,21 +336,27 @@ function iniciarMapa() {
   }
   mapa = L.map("mapa", { zoomControl: false, attributionControl: true, zoomSnap: 0.25, tap: true });
   L.control.zoom({ position: "bottomright" }).addTo(mapa);
-  // Planos sin clave: OpenStreetMap (oscurecido con un filtro en modo oscuro) y satélite de Esri
+  // Fondos sin clave. «Sencillo»: lienzo gris de Esri (claro u oscuro según el tema) con los nombres
+  // de los pueblos encima: limpio, para que destaquen la vía y los trenes. «Detallado»: OpenStreetMap.
+  const esri = (srv) => `https://server.arcgisonline.com/ArcGIS/rest/services/${srv}/MapServer/tile/{z}/{y}/{x}`;
+  const tono = oscuroMapa() ? "Dark" : "Light";
+  const sencillo = L.layerGroup([
+    L.tileLayer(esri(`Canvas/World_${tono}_Gray_Base`), { maxZoom: 19, maxNativeZoom: 16, attribution: "Mapa &copy; Esri, HERE, Garmin, &copy; OpenStreetMap" }),
+    L.tileLayer(esri(`Canvas/World_${tono}_Gray_Reference`), { maxZoom: 19, maxNativeZoom: 16, zIndex: 3 }),
+  ]);
   const planos = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
     maxZoom: 19, className: "base-osm",
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
   });
-  const satelite = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
-    maxZoom: 19, attribution: "Imágenes &copy; Esri, Maxar, Earthstar Geographics",
-  });
-  (leer("capa", "planos") === "satelite" ? satelite : planos).addTo(mapa);
-  L.control.layers({ "Plano": planos, "Satélite": satelite }, null, { position: "topright" }).addTo(mapa);
-  mapa.on("baselayerchange", (e) => guardar("capa", e.name === "Satélite" ? "satelite" : "planos"));
+  const satelite = L.tileLayer(esri("World_Imagery"), { maxZoom: 19, attribution: "Imágenes &copy; Esri, Maxar, Earthstar Geographics" });
+  const fondos = { "Sencillo": sencillo, "Detallado": planos, "Satélite": satelite };
+  (fondos[leer("fondo", "Sencillo")] || sencillo).addTo(mapa);
+  L.control.layers(fondos, null, { position: "topright" }).addTo(mapa);
+  mapa.on("baselayerchange", (e) => guardar("fondo", e.name));
 
   // Vía: borde + línea para que se lea sobre cualquier fondo
-  L.polyline(LINEA.trazado, { color: oscuroMapa() ? "#000" : "#fff", weight: 9, opacity: 0.55, interactive: false }).addTo(mapa);
-  L.polyline(LINEA.trazado, { color: "#e93cac", weight: 5, opacity: 0.95, interactive: false }).addTo(mapa);
+  L.polyline(LINEA.trazado, { color: oscuroMapa() ? "#0b0b0e" : "#fff", weight: 10, opacity: 0.85, interactive: false, lineCap: "round", lineJoin: "round" }).addTo(mapa);
+  L.polyline(LINEA.trazado, { color: "#e93cac", weight: 4.5, opacity: 1, interactive: false, lineCap: "round", lineJoin: "round" }).addTo(mapa);
   capaRuta = L.layerGroup().addTo(mapa);
 
   for (const e of LINEA.estaciones) {
@@ -367,12 +373,24 @@ function iniciarMapa() {
   }
   capaCruces = L.layerGroup().addTo(mapa);
   capaTrenes = L.layerGroup().addTo(mapa);
-  mapa.on("zoomend", ajustarEtiquetas);
+  mapa.on("zoomend", () => { ajustarEtiquetas(); despejarEtiquetas(); });
+  mapa.on("moveend", despejarEtiquetas);
   mapa.on("dragstart", () => { if (seguir) { seguir = false; pintarFichaTren(); } });
   mapa.on("click", () => seleccionarTren(null));
   crearControlesMapa();
-  mapa.fitBounds(L.latLngBounds(LINEA.trazado), { padding: [20, 20] });
+  mapa.attributionControl.setPrefix(false);
+  vistaInicialMapa();
   ajustarEtiquetas();
+}
+/* En el móvil la línea entera (Gijón–Cudillero, muy alargada) queda diminuta en una pantalla
+   vertical: se abre encuadrando TU trayecto de «Mi viaje». En el ordenador, la línea completa. */
+function vistaInicialMapa() {
+  const o = +$("o").value, d = +$("d").value;
+  if (window.innerWidth < 600 && o !== d) {
+    const a = Math.min(o, d), b = Math.max(o, d);
+    const pts = LINEA.estaciones.slice(a, b + 1).map((e) => [e.lat, e.lon]);
+    mapa.fitBounds(L.latLngBounds(pts), { padding: [40, 40], maxZoom: 14 });
+  } else mapa.fitBounds(L.latLngBounds(LINEA.trazado), { padding: [20, 20] });
 }
 
 function crearControlesMapa() {
@@ -381,6 +399,7 @@ function crearControlesMapa() {
     onAdd() {
       const d = L.DomUtil.create("div", "mapa-botones");
       d.innerHTML = `<button type="button" id="m-yo" title="Mi estación más cercana">📍<span class="txt-l" id="m-yo-txt"> Cerca de mí</span></button>
+        <button type="button" id="m-mio" title="Ir a mi tren (el próximo de «Mi viaje») y seguirlo">★<span class="txt-l"> Mi tren</span></button>
         <button type="button" id="m-linea" title="Ver toda la línea">↔<span class="txt-l"> Toda la línea</span></button>
         <button type="button" id="m-grande" title="Ampliar mapa">⤢</button>`;
       L.DomEvent.disableClickPropagation(d);
@@ -400,6 +419,23 @@ function crearControlesMapa() {
     setTimeout(() => mapa.invalidateSize(), 80);
   };
   $("m-yo").onclick = cercaDeMi;
+  $("m-mio").onclick = () => {
+    const id = miTrenId();
+    if (!id) { aviso("Elige tu trayecto en «Mi viaje» para seguir tu tren."); return; }
+    if (!marcas[id]) {
+      const v = viajesEntre(+$("o").value, +$("d").value, 1)[0];
+      aviso(v ? `Tu tren ${v.t.num} aún no ha salido: sale a las ${hm(v.t.est_d[v.jo])}.` : "Tu tren aún no está en circulación.");
+      return;
+    }
+    seguir = true; seleccionarTren(id);
+    mapa.setView(marcas[id].getLatLng(), Math.max(mapa.getZoom(), 13), { animate: true });
+  };
+}
+function miTrenId() {
+  const o = +$("o").value, d = +$("d").value;
+  if (o === d) return null;
+  const v = viajesEntre(o, d, 1);
+  return v.length ? v[0].t.id : null;
 }
 
 function ajustarEtiquetas() {
@@ -541,7 +577,7 @@ function pintarRutaSel(t, x) {
 
 function pintarTrenesMapa() {
   if (!mapa || !R) return;
-  const now = ahora(), vivos = new Set();
+  const now = ahora(), vivos = new Set(), mio = miTrenId();
   if (pintarTrenesMapa._cruces !== R) {  // datos nuevos (cada 15 s): cruces y ventanas de estación
     pintarCrucesMapa();
     pintarTrenesMapa._cruces = R;
@@ -556,10 +592,10 @@ function pintarTrenesMapa() {
     const r = Math.round(retrasoActual(t));
     const rc = !t.con_datos ? "gris" : r <= 0 ? "ok" : r <= 5 ? "warn" : "bad";
     const ang = Math.round(rumbo(x, t.dir));
-    const sel = t.id === trenSel;
-    const html = `<div class="tren-m ${t.dir > 0 ? "ida" : "vta"}${sel ? " sel" : ""}${t.con_datos ? "" : " sindatos"}">
+    const sel = t.id === trenSel, esMio = t.id === mio;
+    const html = `<div class="tren-m ${t.dir > 0 ? "ida" : "vta"}${sel ? " sel" : ""}${esMio ? " mio" : ""}${t.con_datos ? "" : " sindatos"}">
       <div class="tm-punto" style="background:${colorDirHex(t.dir)}"><svg class="tm-flecha" width="16" height="16" viewBox="-8 -8 16 16" aria-hidden="true"><path transform="rotate(${ang})" d="M6 0 L-4 -5 L-1.5 0 L-4 5 Z" fill="#fff"/></svg></div>
-      <div class="tm-etq"><b>${t.num}</b><span class="tm-r ${rc}">${t.con_datos ? (r > 0 ? "+" + r : "✓") : "?"}</span></div></div>`;
+      <div class="tm-etq">${esMio ? '<span class="tm-mio">★</span>' : ""}<b>${t.num}</b><span class="tm-r ${rc}">${t.con_datos ? (r > 0 ? "+" + r : "✓") : "?"}</span></div></div>`;
     let m = marcas[t.id];
     if (!m) {
       m = marcas[t.id] = L.marker(ll, { icon: L.divIcon({ html, className: "", iconSize: null }), zIndexOffset: 1000, riseOnHover: true })
@@ -569,7 +605,7 @@ function pintarTrenesMapa() {
       m.setLatLng(ll);
       if (m._html !== html) { m.setIcon(L.divIcon({ html, className: "", iconSize: null })); m._html = html; }
     }
-    m.setZIndexOffset(sel ? 3000 : 1000);
+    m.setZIndexOffset(sel ? 3000 : esMio ? 2000 : 1000);
     if (sel) {
       if (!pintarTrenesMapa._rutaT || now - pintarTrenesMapa._rutaT > 0.25 || pintarTrenesMapa._rutaId !== t.id) {
         pintarRutaSel(t, x); pintarTrenesMapa._rutaT = now; pintarTrenesMapa._rutaId = t.id;
@@ -580,6 +616,55 @@ function pintarTrenesMapa() {
   for (const id of Object.keys(marcas)) if (!vivos.has(id)) { capaTrenes.removeLayer(marcas[id]); delete marcas[id]; }
   if (trenSel && !vivos.has(trenSel)) seleccionarTren(null);
   pintarFichaTren();
+  despejarEtiquetas();
+}
+
+/* Etiquetas sin solapes, como en los mapas profesionales: lo que se mueve (los trenes) manda.
+   - La etiqueta de un tren solo se desplaza un poco (o cambia de lado) si pisa a otro tren o un cruce.
+   - Si pisa el nombre de una estación, es el nombre de la estación el que se oculta mientras pasa.
+   Se mantiene la posición anterior mientras siga libre, para que no bailen al moverse. */
+function despejarEtiquetas() {
+  if (!mapa || !capaTrenes) return;
+  const cont = mapa.getContainer(), cr = cont.getBoundingClientRect();
+  const rel = (el) => { const r = el.getBoundingClientRect(); return [r.left - cr.left, r.top - cr.top, r.width, r.height]; };
+  const pisa = (a, b) => a[0] < b[0] + b[2] && a[0] + a[2] > b[0] && a[1] < b[1] + b[3] && a[1] + a[3] > b[1];
+  const obst = [], ocupado = [];
+  if (capaCruces) capaCruces.eachLayer((m) => { const el = m._icon && m._icon.firstElementChild; if (el && el.offsetWidth) obst.push(rel(el)); });
+  const items = [];
+  for (const id in marcas) {
+    const m = marcas[id], tm = m._icon && m._icon.querySelector(".tren-m");
+    const et = tm && tm.querySelector(".tm-etq");
+    if (!et) continue;
+    const p = mapa.latLngToContainerPoint(m.getLatLng()), punto = [p.x - 13, p.y - 13, 26, 26];
+    obst.push(punto); ocupado.push(punto);
+    items.push({ et, p, sube: tm.classList.contains("ida"), pr: tm.classList.contains("sel") ? 0 : tm.classList.contains("mio") ? 1 : 2 });
+  }
+  items.sort((a, b) => a.pr - b.pr || a.p.y - b.p.y);
+  for (const it of items) {
+    const base = [it.p.x + it.et.offsetLeft, it.p.y + it.et.offsetTop, it.et.offsetWidth, it.et.offsetHeight];
+    // si se sale por la derecha, al otro lado del punto
+    const dx = base[0] + base[2] > cr.width - 6 ? -(base[2] + 2 * it.et.offsetLeft) : 0;
+    base[0] += dx;
+    const s = it.sube ? -1 : 1;
+    const validas = [0, s * 20, -s * 36];                // en su sitio, un poco más allá, o al otro lado del punto
+    const opciones = [it.et._dy || 0, ...validas].filter((v, i, a) => validas.includes(v) && a.indexOf(v) === i);
+    let dy = 0;
+    for (const o of opciones) {
+      const caja = [base[0], base[1] + o, base[2], base[3]];
+      if (caja[1] < 0 || caja[1] + caja[3] > cr.height) continue;
+      if (!obst.some((b) => pisa(caja, b))) { dy = o; break; }
+    }
+    it.et._dy = dy;
+    it.et.style.transform = dx || dy ? `translate(${dx}px,${dy}px)` : "";
+    const caja = [base[0], base[1] + dy, base[2], base[3]];
+    obst.push(caja); ocupado.push(caja);
+  }
+  for (const [, m] of etiquetasEst) {   // los nombres de estación ceden ante los trenes
+    const el = m.getTooltip() && m.getTooltip().getElement();
+    if (!el || el.style.display === "none") continue;
+    el.classList.remove("tapada");
+    if (el.offsetWidth && ocupado.some((b) => pisa(rel(el), b))) el.classList.add("tapada");
+  }
 }
 
 /* ---------------------------------------------------------------- malla */
@@ -961,7 +1046,7 @@ function irA(tab) {
   if (tab === "mapa") {
     const nuevo = !mapa;
     iniciarMapa();
-    setTimeout(() => { if (mapa) { mapa.invalidateSize(); if (nuevo) mapa.fitBounds(L.latLngBounds(LINEA.trazado), { padding: [16, 16] }); pintarTrenesMapa(); } }, 60);
+    setTimeout(() => { if (mapa) { mapa.invalidateSize(); if (nuevo) vistaInicialMapa(); pintarTrenesMapa(); } }, 60);
   }
   if (tab === "precision") cargarPrecision();
   pintarTodo();
