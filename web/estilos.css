@@ -295,3 +295,56 @@ body.mapa-grande #mapa{flex:1;height:auto;border-radius:0;border:0}
   #ir-swap{justify-self:center;transform:rotate(90deg)}
   #ir-buscar{width:100%}
 }
+
+/* ============================ Inicio (panel de resumen) ============================ */
+.dash{display:flex;flex-direction:column;gap:14px}
+.hero{border-radius:18px;padding:18px;color:#fff;background:linear-gradient(135deg,var(--c4),var(--c4d));box-shadow:0 6px 20px color-mix(in srgb,var(--c4) 30%,transparent);position:relative;overflow:hidden}
+.hero-ok{background:linear-gradient(135deg,#16a34a,#0f7a37)}
+.hero-warn{background:linear-gradient(135deg,#d97706,#b45309)}
+.hero-bad{background:linear-gradient(135deg,#dc2626,#991b1b)}
+.hero-top{display:flex;align-items:center;gap:12px}
+.hero .pill-linea{background:rgba(255,255,255,.22);font-size:16px}
+.hero-tit{font-weight:800;font-size:17px;line-height:1.1}
+.hero-sub{font-size:13px;opacity:.9;margin-top:2px}
+.hero-dot{margin-left:auto;width:11px;height:11px;border-radius:50%;background:#fff;box-shadow:0 0 0 4px rgba(255,255,255,.25);animation:lat 2s infinite}
+.hero-kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:16px}
+.hk{background:rgba(255,255,255,.14);border-radius:12px;padding:10px 8px;text-align:center;backdrop-filter:blur(2px)}
+.hk-n{font-size:24px;font-weight:800;line-height:1}
+.hk-l{font-size:11px;opacity:.92;margin-top:4px;line-height:1.15}
+.cta-ir{display:flex;align-items:center;gap:14px;width:100%;text-align:left;border:1px solid color-mix(in srgb,var(--c4) 40%,var(--bd));background:color-mix(in srgb,var(--c4) 6%,var(--panel));border-radius:16px;padding:16px;cursor:pointer;box-shadow:var(--sombra)}
+.cta-ir:hover{border-color:var(--c4)}
+.cta-ic{font-size:26px;flex:0 0 auto}
+.cta-tx{flex:1;min-width:0}
+.cta-t{font-weight:800;font-size:16px}
+.cta-s{color:var(--tx2);font-size:13px;margin-top:2px}
+.cta-fl{font-size:22px;color:var(--c4);font-weight:800}
+.card{background:var(--panel);border:1px solid var(--bd);border-radius:16px;box-shadow:var(--sombra);padding:15px 16px}
+.card-cab{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:8px}
+.card-cab h3{font-size:15px;margin:0}
+.link{border:0;background:none;color:var(--c4);font-weight:700;font-size:13px;cursor:pointer;text-decoration:none}
+.mini-ruta{font-size:13px;color:var(--tx2);font-weight:600;margin-bottom:8px}
+.mr-fl{color:var(--mut)}
+.mini-tren{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 0;border-top:1px solid var(--bd);cursor:pointer}
+.mini-tren:first-of-type{border-top:0}
+.mt-l{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
+.mt-r{display:flex;align-items:center;gap:10px;flex:0 0 auto}
+.mt-when{font-size:12.5px;color:var(--tx2)}
+.mt-lle{font-size:19px;font-weight:800}
+.btn-grande2{width:100%;border:1px solid var(--bd2);background:var(--panel2);color:var(--tx);border-radius:11px;padding:12px;font-weight:700;font-size:14px;cursor:pointer}
+.btn-grande2:hover{border-color:var(--mut)}
+.btn-grande2:disabled{opacity:.6}
+.cerca-est,.cerca-bus{margin-top:12px;border:1px solid var(--bd);border-radius:12px;padding:11px 13px;background:var(--panel2)}
+.ce-cab{font-size:14px;margin-bottom:4px}
+.ce-fila{display:flex;align-items:center;gap:10px;padding:6px 0;border-top:1px solid var(--bd)}
+.ce-fila:first-of-type{border-top:0}
+.ce-mid{flex:1;min-width:0;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tools{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.tool{display:flex;flex-direction:column;align-items:center;gap:6px;border:1px solid var(--bd);background:var(--panel2);border-radius:12px;padding:12px 6px;cursor:pointer;text-decoration:none;color:var(--tx);font-size:12px;font-weight:600;text-align:center}
+.tool:hover{border-color:var(--mut)}
+.tool span{line-height:1.1}
+@media (max-width:520px){.tools{grid-template-columns:repeat(3,1fr)}}
+/* Navegación móvil: solo las 5 principales abajo; el resto desde Inicio → «Todo» */
+@media (max-width:760px){
+  nav.tabs button[data-tab="malla"],nav.tabs button[data-tab="cruces"],
+  nav.tabs button[data-tab="precision"],nav.tabs button[data-tab="info"]{display:none}
+}

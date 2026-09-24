@@ -751,6 +751,96 @@ function pintarCajon() {
 }
 
 /* ---------------------------------------------------------------- navegación */
+/* ---------------------------------------------------------------- Inicio (panel de resumen) */
+function proxDesde(k, n) {
+  const now = ahora(), out = [];
+  for (const t of R.trenes) {
+    if (t.fin || t.cancelado) continue;
+    const j = t.k.indexOf(k);
+    if (j < 0 || !t.para[j] || t.j0 > j) continue;
+    const sale = t.est_d[j];
+    if (sale == null || sale < now - 0.5) continue;
+    out.push({ num: t.num, dir: t.dir, destino: t.destino, sale });
+  }
+  return out.sort((a, b) => a.sale - b.sale).slice(0, n);
+}
+function pintarInicio() {
+  if (!R || !LINEA) return;
+  const viejo = edadDatos() > 90;
+  const meta = { directo: ["ok", "En directo"], congelado: ["warn", "Renfe no actualiza"], sin_conexion: ["bad", "Sin conexión con Renfe"] };
+  const [cls, lbl] = viejo ? ["warn", "Actualizando…"] : (meta[R.calidad] || ["", "En directo"]);
+  const prox = (R.cruces || []).find((c) => c.hora >= R.ahora - 1);
+  let h = `<div class="dash">`;
+  h += `<div class="hero hero-${cls}">
+      <div class="hero-top"><span class="pill-linea">C4</span>
+        <div><div class="hero-tit">Cercanías C-4 · Gijón–Cudillero</div>
+        <div class="hero-sub">${esc(lbl)}${R.actualizado ? " · actualizado " + esc(R.actualizado.slice(0, 5)) : ""}</div></div>
+        <span class="hero-dot"></span></div>
+      <div class="hero-kpis">
+        <div class="hk"><div class="hk-n num">${R.en_circulacion || 0}</div><div class="hk-l">trenes en circulación</div></div>
+        <div class="hk"><div class="hk-n num">${R.con_posicion || 0}</div><div class="hk-l">localizados en vivo</div></div>
+        <div class="hk"><div class="hk-n num">${prox ? hm(prox.hora) : "—"}</div><div class="hk-l">${prox ? "próx. cruce · " + esc(nombreCorto(prox.estacion)) : "sin cruces próximos"}</div></div>
+      </div></div>`;
+  h += `<button class="cta-ir" onclick="irA('ir')">
+      <div class="cta-ic">🧭</div>
+      <div class="cta-tx"><div class="cta-t">¿A dónde vas?</div><div class="cta-s">Ruta puerta a puerta: bus urbano + tren, con la hora real de llegada</div></div>
+      <span class="cta-fl">→</span></button>`;
+  const o = +$("o").value, d = +$("d").value;
+  h += `<div class="card"><div class="card-cab"><h3>Tu próximo tren</h3><button class="link" onclick="irA('viaje')">Ver todos ›</button></div>`;
+  if (o === d) h += `<div class="vacio">Elige un trayecto en «Mi viaje».</div>`;
+  else {
+    const v = viajesEntre(o, d, 2), now = ahora();
+    h += `<div class="mini-ruta">${esc(nombreCorto(est(o).nombre))} <span class="mr-fl">→</span> ${esc(nombreCorto(est(d).nombre))}</div>`;
+    h += v.length ? v.map(({ t, jo, jd }) => {
+      const sal = t.est_d[jo], lle = t.est_a[jd], falta = Math.round(sal - now);
+      return `<div class="mini-tren" data-tren="${t.id}" data-jo="${jo}" data-jd="${jd}">
+        <div class="mt-l"><b>Tren ${t.num}</b><span class="tag ${t.dir > 0 ? "ida" : "vta"}">→ ${esc(destinoCorto(t))}</span>${t.con_datos ? tagRetraso(t.retraso) : ""}</div>
+        <div class="mt-r"><span class="mt-when">${falta <= 0 ? "sale ya" : falta < 60 ? "en " + falta + " min" : hm(sal)}</span><span class="mt-lle num">${hm(lle)}</span></div></div>`;
+    }).join("") : `<div class="vacio">No quedan trenes hoy en este trayecto.</div>`;
+  }
+  h += `</div>`;
+  h += `<div class="card"><div class="card-cab"><h3>Cerca de ti</h3></div>
+      <button class="btn-grande2" id="inicio-cerca">📍 Estaciones y buses cerca de mí</button>
+      <div id="inicio-cerca-res"></div></div>`;
+  const tools = [["ir", "Ir a…", "🧭"], ["mapa", "Mapa en vivo", "🗺️"], ["/bus/", "Bus en vivo", "🚌"],
+                 ["malla", "Malla", "📈"], ["cruces", "Cruces", "⇄"], ["precision", "Precisión", "🎯"],
+                 ["estacion", "Estación", "🚉"], ["info", "Cómo funciona", "ℹ️"]];
+  h += `<div class="card"><div class="card-cab"><h3>Todo</h3></div><div class="tools">` +
+    tools.map(([t, n, ic]) => t[0] === "/" ? `<a class="tool" href="${t}">${ic}<span>${n}</span></a>`
+      : `<button class="tool" onclick="irA('${t}')">${ic}<span>${n}</span></button>`).join("") + `</div></div>`;
+  h += `</div>`;
+  $("inicio").innerHTML = h;
+  const b = $("inicio-cerca"); if (b) b.onclick = inicioCerca;
+}
+function inicioCerca() {
+  const res = $("inicio-cerca-res"), b = $("inicio-cerca");
+  if (!navigator.geolocation) { res.innerHTML = `<div class="vacio">Este dispositivo no da la ubicación.</div>`; return; }
+  b.disabled = true; b.textContent = "📍 Buscando…";
+  navigator.geolocation.getCurrentPosition(async (pos) => {
+    const yo = [pos.coords.latitude, pos.coords.longitude];
+    const dk = (e) => Math.hypot((e.lon - yo[1]) * 81, (e.lat - yo[0]) * 111);
+    const e = LINEA.estaciones.reduce((a, x) => dk(x) < dk(a) ? x : a);
+    const sal = proxDesde(e.k, 3);
+    let h = `<div class="cerca-est"><div class="ce-cab">🚉 <b>${esc(e.nombre)}</b> <span class="sub">a ${dk(e) < 1 ? Math.round(dk(e) * 1000) + " m" : dk(e).toFixed(1) + " km"}</span></div>`;
+    h += sal.length ? sal.map((s) => `<div class="ce-fila"><span class="tag ${s.dir > 0 ? "ida" : "vta"}">→ ${esc(nombreCorto(s.destino))}</span><span class="ce-mid">Tren ${s.num}</span><b class="num">${hm(s.sale)}</b></div>`).join("") : `<div class="vacio">Sin trenes próximos.</div>`;
+    h += `</div>`;
+    b.disabled = false; b.textContent = "📍 Actualizar mi posición";
+    res.innerHTML = h + `<div class="vacio" id="cb">Buscando buses cerca…</div>`;
+    try {
+      const j = await pedir(`/api/bus/cercanas?lat=${yo[0]}&lon=${yo[1]}`, 9000);
+      const el = $("cb"); if (!el) return;
+      el.outerHTML = (j.paradas && j.paradas.length)
+        ? `<div class="cerca-bus"><div class="ce-cab">🚌 Paradas de bus cerca</div>` +
+          j.paradas.slice(0, 4).map((p) => `<div class="ce-fila"><span class="ce-mid" style="flex:1">${esc(p.nombre)}</span><span class="sub">${p.metros} m</span></div>`).join("") +
+          `<a class="link" href="/bus/" style="display:inline-block;margin-top:8px">Abrir el mapa de buses en vivo ›</a></div>`
+        : "";
+    } catch (err) { const el = $("cb"); if (el) el.remove(); }
+  }, () => {
+    b.disabled = false; b.textContent = "📍 Estaciones y buses cerca de mí";
+    res.innerHTML = `<div class="vacio">No se pudo obtener la ubicación.</div>`;
+  }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 });
+}
+
 function irA(tab) {
   tabActual = tab;
   for (const b of document.querySelectorAll("nav.tabs button")) b.setAttribute("aria-selected", b.dataset.tab === tab);
@@ -767,6 +857,7 @@ function irA(tab) {
 function pintarTodo() {
   if (!R || !LINEA) return;
   pintarEstado();
+  if (tabActual === "inicio") pintarInicio();
   if (tabActual === "viaje") pintarViaje();
   if (tabActual === "estacion") pintarEstacion();
   if (tabActual === "malla") pintarMalla();
@@ -918,7 +1009,7 @@ function prepararIphone() {
   prepararIphone();
   const hash = location.hash.slice(1);
   await cargarEstado();
-  irA(["ir", "viaje", "estacion", "mapa", "malla", "cruces", "precision", "info"].includes(hash) ? hash : "ir");
+  irA(["inicio", "ir", "viaje", "estacion", "mapa", "malla", "cruces", "precision", "info"].includes(hash) ? hash : "inicio");
   setInterval(cargarEstado, 15000);
   setInterval(() => { if (tabActual === "viaje" && R && document.activeElement !== $("andar")) pintarViaje(); }, 20000);
   document.addEventListener("visibilitychange", () => { if (!document.hidden) cargarEstado(); });

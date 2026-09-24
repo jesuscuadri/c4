@@ -31,7 +31,8 @@
     </div>
   </div>
   <nav class="tabs" role="tablist">
-    <button role="tab" data-tab="ir" aria-selected="true"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s7-6.2 7-11a7 7 0 1 0-14 0c0 4.8 7 11 7 11z"/><circle cx="12" cy="10" r="2.4"/></svg><span class="l-largo">Ir a…</span><span class="l-corto">Ir a…</span></button>
+    <button role="tab" data-tab="inicio" aria-selected="true"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11l8-7 8 7M6 9.5V20h12V9.5"/></svg><span class="l-largo">Inicio</span><span class="l-corto">Inicio</span></button>
+    <button role="tab" data-tab="ir"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s7-6.2 7-11a7 7 0 1 0-14 0c0 4.8 7 11 7 11z"/><circle cx="12" cy="10" r="2.4"/></svg><span class="l-largo">Ir a…</span><span class="l-corto">Ir a…</span></button>
     <button role="tab" data-tab="viaje"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="18" r="2"/><circle cx="18" cy="6" r="2"/><path d="M6 16V10a3 3 0 0 1 3-3h7M18 8v6a3 3 0 0 1-3 3H8"/></svg><span class="l-largo">Mi viaje</span><span class="l-corto">Viaje</span></button>
     <button role="tab" data-tab="estacion"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg><span class="l-largo">Estación</span><span class="l-corto">Estación</span></button>
     <button role="tab" data-tab="mapa"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4 3.5 6v14L9 18l6 2 5.5-2V4L15 6 9 4zM9 4v14M15 6v14"/></svg><span class="l-largo">Mapa</span><span class="l-corto">Mapa</span></button>
@@ -45,7 +46,11 @@
 <main>
   <div id="avisos"></div>
 
-  <section id="tab-ir">
+  <section id="tab-inicio">
+    <div id="inicio"><div class="vacio">Cargando…</div></div>
+  </section>
+
+  <section id="tab-ir" hidden>
     <div class="panel">
       <p class="sub" style="margin:0 0 12px">Dime de dónde sales y a dónde vas. Combino <b>bus urbano de Gijón + tren C-4</b> y te cuadro la conexión, con la hora de llegada real (contando las esperas de cruce del tren).</p>
       <div class="ir-form">
