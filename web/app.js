@@ -1,7 +1,7 @@
 "use strict";
 /* C-4 en tiempo real · interfaz web (sin dependencias salvo Leaflet para el mapa) */
 
-let LINEA = null, R = null, tRecibido = 0, PREC = null;
+let LINEA = null, R = null, tRecibido = 0, PREC = null, APREN = null;
 let tabActual = "viaje", mapa = null, capaTrenes = null, marcas = {}, cajonTren = null;
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -68,7 +68,11 @@ async function cargarEstado() {
   }
 }
 async function cargarPrecision() {
-  try { PREC = await pedir("/api/precision"); pintarPrecision(); } catch (e) { /* nada */ }
+  try {
+    PREC = await pedir("/api/precision");
+    try { APREN = await pedir("/api/aprendizaje"); } catch (e) { /* opcional */ }
+    pintarPrecision();
+  } catch (e) { /* nada */ }
 }
 
 /* ---------------------------------------------------------------- estado y avisos */
@@ -648,16 +652,30 @@ function pintarCruces() {
 }
 
 /* ---------------------------------------------------------------- precisión */
+function tarjetaAprendizaje() {
+  if (!APREN || APREN.cargando) return "";
+  const kpi = (v, l) => `<div class="kpi"><div class="v num">${v}</div><div class="l">${l}</div></div>`;
+  const ns = APREN.sesgos_n || 0;
+  let s = `<div class="card apr-card"><div class="card-cab"><h3>🧠 Aprende de sus errores</h3></div>
+    <p class="sub" style="margin:0 0 10px">El programa se corrige solo: guarda cada predicción, la compara con lo que pasó de verdad y ajusta lo que falla. Cuanto más se usa, más afina.</p>
+    <div class="kpis">${kpi(APREN.tramos || 0, "tramos con tiempo real aprendido")}${kpi(ns, "estaciones con sesgo corregido")}</div>`;
+  if (APREN.sesgos && APREN.sesgos.length)
+    s += `<div class="apr-lista">` + APREN.sesgos.slice(0, 8).map((x) =>
+      `<div class="apr-fila"><span>${esc(x.estacion)}</span><b class="num ${x.min > 0 ? "mas" : "menos"}">${x.min > 0 ? "+" : ""}${x.min} min</b></div>`).join("") +
+      `</div><p class="sub" style="margin-top:6px">«+» = ahí los trenes suelen llegar algo más tarde de lo previsto; ya está corregido y acotado para no pasarse.</p>`;
+  return s + `</div>`;
+}
 function pintarPrecision() {
   const el = $("precision");
-  if (!PREC) { el.innerHTML = `<div class="vacio">Cargando…</div>`; return; }
+  if (!PREC) { el.innerHTML = tarjetaAprendizaje() || `<div class="vacio">Cargando…</div>`; return; }
   const sem = PREC.semana || {}, hoy = PREC.hoy || {}, tot = sem.total, th = hoy.total;
+  const apr = tarjetaAprendizaje();
   if (!tot) {
-    el.innerHTML = `<div class="aviso info"><span>ℹ</span><div><b>Aún no hay mediciones.</b> Se van acumulando solas mientras el programa está abierto y Renfe da datos en directo. Con un par de días de uso ya verás si las estimaciones aciertan más que la app oficial.</div></div>`;
+    el.innerHTML = apr + `<div class="aviso info"><span>ℹ</span><div><b>Aún no hay mediciones de acierto.</b> Se acumulan solas mientras el programa está abierto y Renfe da datos en directo. Con un par de días de uso verás si acierta más que la app oficial.</div></div>`;
     return;
   }
   const kpi = (v, l) => `<div class="kpi"><div class="v num">${v}</div><div class="l">${l}</div></div>`;
-  let h = `<div class="kpis">` +
+  let h = apr + `<div class="kpis">` +
     kpi(`${tot.error_nuestro.toFixed(1)} min`, "Error medio de este programa (7 días)") +
     kpi(`${tot.error_adif.toFixed(1)} min`, "Error medio de la app oficial (7 días)") +
     kpi(`${tot.acierto_nuestro}%`, "Llegadas acertadas a ±1 min (este programa)") +
@@ -674,7 +692,7 @@ function pintarPrecision() {
     <thead><tr><th>Antelación</th><th>Llegadas</th><th>Error medio (min) · este programa</th><th>App oficial</th><th>Acierto ±1 min</th><th>Sesgo</th></tr></thead>
     <tbody>${["5", "10", "20", "30"].map((hz) => fila(hz, g[hz])).join("")}</tbody></table></div>`;
   h += tabla(sem, "Últimos 7 días") + (th ? tabla(hoy, "Hoy") : "");
-  h += `<p class="sub" style="margin-top:10px">Sesgo positivo: el programa tiende a decir que llegará más tarde de lo que llega (pesimista). Negativo: optimista. Si ves un sesgo claro, ajusta <code>margen_cruce_min</code> o <code>recuperacion</code> en <code>config.json</code>.</p>`;
+  h += `<p class="sub" style="margin-top:10px">Sesgo positivo: el programa tiende a decir que se llega más tarde de lo real (pesimista); negativo, optimista. <b>Ya no hay que tocar nada a mano:</b> el propio programa aprende ese sesgo por estación y lo corrige solo (arriba, «Aprende de sus errores»).</p>`;
   el.innerHTML = h;
 }
 
@@ -781,6 +799,8 @@ function pintarInicio() {
         <div class="hk"><div class="hk-n num">${R.con_posicion || 0}</div><div class="hk-l">localizados en vivo</div></div>
         <div class="hk"><div class="hk-n num">${prox ? hm(prox.hora) : "—"}</div><div class="hk-l">${prox ? "próx. cruce · " + esc(nombreCorto(prox.estacion)) : "sin cruces próximos"}</div></div>
       </div></div>`;
+  if ((R.tramos_aprendidos || 0) + (R.sesgos_corregidos || 0) > 0)
+    h += `<div class="apr-strip" onclick="irA('precision')">🧠 <span>Aprendiendo de los datos: <b>${R.tramos_aprendidos || 0}</b> tramos y <b>${R.sesgos_corregidos || 0}</b> estaciones ajustadas a partir de errores</span><span class="cta-fl">›</span></div>`;
   h += `<button class="cta-ir" onclick="irA('ir')">
       <div class="cta-ic">🧭</div>
       <div class="cta-tx"><div class="cta-t">¿A dónde vas?</div><div class="cta-s">Ruta puerta a puerta: bus urbano + tren, con la hora real de llegada</div></div>

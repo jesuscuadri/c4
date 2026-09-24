@@ -8,10 +8,13 @@ MOTIVO_MIN = 0.5  # por debajo de esto no merece la pena explicar la espera
 
 
 class Estimador:
-    def __init__(self, linea, cfg, aprendidos=None):
+    def __init__(self, linea, cfg, aprendidos=None, sesgos=None):
         self.L = linea
         self.cfg = cfg
         self.aprendidos = aprendidos or {}
+        self.sesgos = sesgos or {}                 # {stop_id: min} corrección aprendida de errores
+        self.sesgo_damp = cfg.get("sesgo_damp", 0.5)
+        self.sesgo_cap = cfg.get("sesgo_cap", 1.0)
         self.cruces_activos = []
 
     # ------------------------------------------------------------------ estado actual
@@ -112,6 +115,12 @@ class Estimador:
                 base = min(max(self.aprendidos[clave], base * 0.6), base * 1.8)
         if tarde and self.cfg["recuperacion"] > 0:
             base *= 1 - self.cfg["recuperacion"]
+        # corrección aprendida de los fallos: si en la estación de llegada solemos
+        # equivocarnos siempre en el mismo sentido, ajustamos (amortiguado y acotado)
+        if self.sesgos:
+            c = self.sesgos.get(self.L.est[v.k[j + 1]])
+            if c is not None:
+                base = max(0.2, base + max(-self.sesgo_cap, min(self.sesgo_cap, self.sesgo_damp * c)))
         return base
 
     def _resolver(self, viajes, estados, deps, ahora):

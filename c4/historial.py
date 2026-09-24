@@ -64,6 +64,39 @@ def aprender_tiempos(dias=30):
     return {k: statistics.median(v) for k, v in muestras.items() if len(v) >= 5}
 
 
+def aprender_sesgos(dias=14, minimo=6, cap=2.0):
+    """Aprende de los fallos. Lee el historial de precisión (lo que el programa dijo que
+    llegaría un tren frente a lo que llegó de verdad) y calcula, por estación, el sesgo
+    sistemático: si en una estación siempre nos quedamos cortos o largos, se guarda esa
+    diferencia (acotada) para corregir las próximas estimaciones.
+
+    Devuelve {stop_id: minutos}, donde un valor positivo significa que los trenes suelen
+    llegar MÁS TARDE de lo que estimábamos (hay que sumar tiempo) y uno negativo, antes."""
+    if not os.path.isdir(HIST):
+        return {}
+    err = defaultdict(list)
+    ficheros = sorted(f for f in os.listdir(HIST) if f.startswith("precision_"))[-dias:]
+    for fn in ficheros:
+        try:
+            with open(os.path.join(HIST, fn), encoding="utf-8") as f:
+                for r in csv.DictReader(f):
+                    try:
+                        e = float(r["real"]) - float(r["nuestra"])
+                    except (ValueError, KeyError):
+                        continue
+                    if abs(e) <= 8:  # descarta valores absurdos (datos corruptos, trenes raros)
+                        err[r["stop"]].append(e)
+        except Exception:  # noqa: BLE001
+            continue
+    out = {}
+    for stop, es in err.items():
+        if len(es) >= minimo:
+            m = statistics.median(es)
+            if abs(m) >= 0.5:                       # solo si el sesgo es apreciable
+                out[stop] = round(max(-cap, min(cap, m)), 2)
+    return out
+
+
 class Precision:
     """Compara, cuando el tren llega de verdad, lo que dijimos antes con lo que diría Adif."""
 

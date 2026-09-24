@@ -41,6 +41,9 @@ CONFIG_DEFECTO = {
     "estaciones_cruce_excluir": [],
     "recuperacion": 0.0,                # fracción de marcha recuperable si va con retraso
     "usar_tiempos_aprendidos": True,
+    "usar_correccion_sesgo": True,      # aprende de los fallos: corrige sesgos por estación
+    "sesgo_damp": 0.5,                  # cuánto se aplica del sesgo aprendido (0-1)
+    "sesgo_cap": 1.0,                   # tope de la corrección por estación (min)
     "guardar_historial": True,
     "bus": True,                        # enlace con el autobus urbano de Gijon (EMTUSA)
     "bus_radio_m": 550,                 # radio para buscar paradas cerca de una estacion

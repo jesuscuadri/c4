@@ -348,3 +348,12 @@ body.mapa-grande #mapa{flex:1;height:auto;border-radius:0;border:0}
   nav.tabs button[data-tab="malla"],nav.tabs button[data-tab="cruces"],
   nav.tabs button[data-tab="precision"],nav.tabs button[data-tab="info"]{display:none}
 }
+
+/* Aprendizaje */
+.apr-strip{display:flex;align-items:center;gap:10px;background:color-mix(in srgb,var(--info) 10%,var(--panel));border:1px solid color-mix(in srgb,var(--info) 25%,var(--bd));color:var(--tx);border-radius:12px;padding:10px 14px;font-size:13px;cursor:pointer}
+.apr-strip span:first-of-type,.apr-strip>span{min-width:0}
+.apr-strip .cta-fl{margin-left:auto;color:var(--info)}
+.apr-card{margin-bottom:14px}
+.apr-lista{margin-top:10px;border-top:1px solid var(--bd);display:grid;gap:2px}
+.apr-fila{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--bd);font-size:14px}
+.apr-fila b.mas{color:var(--warn)}.apr-fila b.menos{color:var(--ok)}

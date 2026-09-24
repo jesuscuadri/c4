@@ -15,7 +15,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from . import gtfs
 from . import planificador
 from .estimador import Estimador
-from .historial import Precision, aprender_tiempos, guardar_observaciones
+from .historial import Precision, aprender_tiempos, aprender_sesgos, guardar_observaciones
 from .linea import Linea
 from .tiemporeal import TiempoReal
 from .emtusa import Emtusa
@@ -36,6 +36,7 @@ class App:
         self.linea_json = None
         self.precision = Precision()
         self.aprendidos = {}
+        self.sesgos = {}
         self.ultimo_aprendizaje = 0
         self.errores_seguidos = 0
         self.url_movil = None
@@ -57,10 +58,11 @@ class App:
         datos = gtfs.extraer(self.cfg, hoy)
         linea = Linea(self.cfg, datos)
         self.aprendidos = aprender_tiempos() if self.cfg["usar_tiempos_aprendidos"] else {}
+        self.sesgos = aprender_sesgos() if self.cfg.get("usar_correccion_sesgo") else {}
         self.ultimo_aprendizaje = time.time()
         with self.lock:
             self.linea = linea
-            self.est = Estimador(linea, self.cfg, self.aprendidos)
+            self.est = Estimador(linea, self.cfg, self.aprendidos, self.sesgos)
             self.rt = TiempoReal(self.cfg)
             self.precision = Precision()
             self.dia = hoy
@@ -92,9 +94,13 @@ class App:
                 guardar_observaciones(self.rt, L)
             except Exception as e:  # noqa: BLE001
                 print("Aviso (historial):", e)
-        if time.time() - self.ultimo_aprendizaje > 3600 and self.cfg["usar_tiempos_aprendidos"]:
-            self.aprendidos = aprender_tiempos()
-            self.est.aprendidos = self.aprendidos
+        if time.time() - self.ultimo_aprendizaje > 3600:
+            if self.cfg["usar_tiempos_aprendidos"]:
+                self.aprendidos = aprender_tiempos()
+                self.est.aprendidos = self.aprendidos
+            if self.cfg.get("usar_correccion_sesgo"):
+                self.sesgos = aprender_sesgos()
+                self.est.sesgos = self.sesgos
             self.ultimo_aprendizaje = time.time()
         calidad = self.rt.calidad()
         if calidad == "congelado":  # Renfe no actualiza: mejor el horario que datos viejos
@@ -113,6 +119,7 @@ class App:
             "con_posicion": sum(1 for t in res["trenes"] if t["fuente"] != "horario" and not t["fin"]),
             "en_circulacion": sum(1 for t in res["trenes"] if not t["fin"] and t["j0"] > 0 or t["parado"] and not t["fin"] and t["con_datos"]),
             "tramos_aprendidos": len(self.aprendidos),
+            "sesgos_corregidos": len(self.sesgos),
             "modo_cruces": self.cfg["cruces"],
             "ts": round(time.time()),
         })
@@ -133,6 +140,19 @@ class App:
                             "destino": L.nombre[v.k[-1]]})
         out.sort(key=lambda x: x["sale"])
         return {"fecha": dia.isoformat(), "trenes": out[:4]}
+
+    def aprendizaje(self):
+        """Qué ha aprendido el sistema: tiempos reales de marcha y correcciones por errores."""
+        with self.lock:
+            L, ap, se = self.linea, self.aprendidos, self.sesgos
+        if not L:
+            return {"cargando": True}
+        nom = {L.est[k]: L.nombre[k] for k in range(len(L.est))}
+        sesgos = [{"estacion": nom.get(s, s), "min": m}
+                  for s, m in sorted(se.items(), key=lambda kv: -abs(kv[1]))]
+        tramos = [{"de": nom.get(a, a), "a": nom.get(b, b), "min": round(m, 1)}
+                  for (a, b), m in sorted(ap.items(), key=lambda kv: kv[0])]
+        return {"tramos": len(ap), "sesgos_n": len(se), "sesgos": sesgos, "tramos_lista": tramos[:80]}
 
     def geocode(self, q):
         with self.lock:
@@ -223,6 +243,8 @@ def servir(app, abrir=True, en_red=False, publico=False):
                     return self._json(app.linea_json or {"cargando": True, "error": app.error_inicio})
             if ruta == "/api/precision":
                 return self._json(Precision.estadisticas())
+            if ruta == "/api/aprendizaje":
+                return self._json(app.aprendizaje())
             if ruta == "/api/ping":
                 return self._json({"ok": True, "hora": datetime.now().strftime("%H:%M:%S")})
             if ruta == "/api/bus/red":
