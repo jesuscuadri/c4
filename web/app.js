@@ -373,7 +373,15 @@ function iniciarMapa() {
   }
   capaCruces = L.layerGroup().addTo(mapa);
   capaTrenes = L.layerGroup().addTo(mapa);
-  mapa.on("zoomend", () => { ajustarEtiquetas(); despejarEtiquetas(); });
+  mapa.createPane("grupos").style.zIndex = 660;
+  const pg = mapa.getPane("grupos");
+  L.DomEvent.disableClickPropagation(pg);
+  pg.addEventListener("click", (ev) => {
+    const b = ev.target.closest("[data-selmapa]");
+    if (b) seleccionarTren(b.dataset.selmapa);
+  });
+  mapa.on("zoomstart", () => { mapa.getPane("grupos").style.visibility = "hidden"; });
+  mapa.on("zoomend", () => { ajustarEtiquetas(); despejarEtiquetas(); mapa.getPane("grupos").style.visibility = ""; });
   mapa.on("moveend", despejarEtiquetas);
   mapa.on("dragstart", () => { if (seguir) { seguir = false; pintarFichaTren(); } });
   mapa.on("click", () => seleccionarTren(null));
@@ -628,37 +636,82 @@ function despejarEtiquetas() {
   const cont = mapa.getContainer(), cr = cont.getBoundingClientRect();
   const rel = (el) => { const r = el.getBoundingClientRect(); return [r.left - cr.left, r.top - cr.top, r.width, r.height]; };
   const pisa = (a, b) => a[0] < b[0] + b[2] && a[0] + a[2] > b[0] && a[1] < b[1] + b[3] && a[1] + a[3] > b[1];
-  const obst = [], ocupado = [];
-  if (capaCruces) capaCruces.eachLayer((m) => { const el = m._icon && m._icon.firstElementChild; if (el && el.offsetWidth) obst.push(rel(el)); });
-  const items = [];
+  const obst = [], ocupado = [], items = [];
   for (const id in marcas) {
     const m = marcas[id], tm = m._icon && m._icon.querySelector(".tren-m");
     const et = tm && tm.querySelector(".tm-etq");
     if (!et) continue;
     const p = mapa.latLngToContainerPoint(m.getLatLng()), punto = [p.x - 13, p.y - 13, 26, 26];
     obst.push(punto); ocupado.push(punto);
-    items.push({ et, p, sube: tm.classList.contains("ida"), pr: tm.classList.contains("sel") ? 0 : tm.classList.contains("mio") ? 1 : 2 });
+    items.push({ id, et, p, sube: tm.classList.contains("ida"),
+                 pr: tm.classList.contains("sel") ? 0 : tm.classList.contains("mio") ? 1 : 2,
+                 clase: tm.classList.contains("sel") ? " sel" : tm.classList.contains("mio") ? " mio" : "" });
   }
+  // aviso de cruce: su sitio natural es a la izquierda de la estación; si un tren lo tapa, encima.
+  // (se calcula, no se mide, para que no parpadee mientras se anima)
+  if (capaCruces) capaCruces.eachLayer((m) => {
+    const el = m._icon && m._icon.firstElementChild;
+    if (!el || !el.offsetWidth) return;
+    const q = mapa.latLngToContainerPoint(m.getLatLng()), w = el.offsetWidth, h = el.offsetHeight;
+    const natural = [q.x - w - 11, q.y - h / 2, w, h], arriba = [q.x - w / 2, q.y - h - 13, w, h];
+    const subir = ocupado.some((b) => pisa(natural, b));
+    el.classList.toggle("arriba", subir);
+    obst.push(subir ? arriba : natural);
+  });
+  // trenes casi en el mismo punto (p. ej. varios en Gijón): una sola ficha con la lista
   items.sort((a, b) => a.pr - b.pr || a.p.y - b.p.y);
+  const grupos = [];
   for (const it of items) {
-    const base = [it.p.x + it.et.offsetLeft, it.p.y + it.et.offsetTop, it.et.offsetWidth, it.et.offsetHeight];
-    // si se sale por la derecha, al otro lado del punto
-    const dx = base[0] + base[2] > cr.width - 6 ? -(base[2] + 2 * it.et.offsetLeft) : 0;
-    base[0] += dx;
-    const s = it.sube ? -1 : 1;
-    const validas = [0, s * 20, -s * 36];                // en su sitio, un poco más allá, o al otro lado del punto
-    const opciones = [it.et._dy || 0, ...validas].filter((v, i, a) => validas.includes(v) && a.indexOf(v) === i);
-    let dy = 0;
-    for (const o of opciones) {
-      const caja = [base[0], base[1] + o, base[2], base[3]];
-      if (caja[1] < 0 || caja[1] + caja[3] > cr.height) continue;
-      if (!obst.some((b) => pisa(caja, b))) { dy = o; break; }
+    const g = grupos.find((gr) => gr.some((o) => Math.hypot(o.p.x - it.p.x, o.p.y - it.p.y) < 34));
+    if (g) g.push(it); else grupos.push([it]);
+  }
+  const pane = mapa.getPane("grupos"), usados = new Set();
+  for (const gr of grupos) {
+    if (gr.length === 1) {
+      const it = gr[0];
+      it.et.style.visibility = "";
+      const w = it.et.offsetWidth, h = it.et.offsetHeight, ol = it.et.offsetLeft;
+      const bx = it.p.x + ol, by = it.p.y + it.et.offsetTop, izq = -(w + 2 * ol), s = it.sube ? -1 : 1;
+      const huecos = [];
+      for (const dx of bx + w > cr.width - 6 ? [izq] : [0, izq]) for (const dy of [0, s * 20, -s * 36, s * 40, -s * 56]) huecos.push([dx, dy]);
+      const prev = it.et._d;
+      if (prev) huecos.sort((u, v) => (v[0] === prev[0] && v[1] === prev[1]) - (u[0] === prev[0] && u[1] === prev[1]));
+      // la primera posición libre; si no hay ninguna, la que menos pisa
+      const pisado = (c) => obst.reduce((t, b) => t + Math.max(0, Math.min(c[0] + c[2], b[0] + b[2]) - Math.max(c[0], b[0])) *
+                                                       Math.max(0, Math.min(c[1] + c[3], b[1] + b[3]) - Math.max(c[1], b[1])), 0);
+      let d = null, mejor = [huecos[0], Infinity];
+      for (const o of huecos) {
+        const caja = [bx + o[0], by + o[1], w, h];
+        if (caja[1] < 0 || caja[1] + caja[3] > cr.height || caja[0] < 0) continue;
+        const a = pisado(caja);
+        if (a === 0) { d = o; break; }
+        if (a < mejor[1]) mejor = [o, a];
+      }
+      d = d || mejor[0];
+      it.et._d = d;
+      it.et.style.transform = d[0] || d[1] ? `translate(${d[0]}px,${d[1]}px)` : "";
+      const caja = [bx + d[0], by + d[1], w, h];
+      obst.push(caja); ocupado.push(caja);
+      continue;
     }
-    it.et._dy = dy;
-    it.et.style.transform = dx || dy ? `translate(${dx}px,${dy}px)` : "";
-    const caja = [base[0], base[1] + dy, base[2], base[3]];
+    // ficha agrupada
+    for (const it of gr) it.et.style.visibility = "hidden";
+    const clave = gr.map((it) => it.id).sort().join("|");
+    usados.add(clave);
+    let el = pane.querySelector(`[data-grupo="${clave}"]`);
+    if (!el) { el = L.DomUtil.create("div", "grupo-etq", pane); el.dataset.grupo = clave; }
+    const html = gr.map((it) => `<div class="ge-fila${it.clase}" data-selmapa="${it.id}">${it.et.innerHTML}</div>`).join("");
+    if (el._html !== html) { el.innerHTML = html; el._html = html; }
+    const xs = gr.map((it) => it.p.x), ys = gr.map((it) => it.p.y);
+    const w = el.offsetWidth, h = el.offsetHeight, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+    let x0 = Math.max(...xs) + 18;
+    if (x0 + w > cr.width - 6) x0 = Math.min(...xs) - 18 - w;
+    const y0 = Math.max(4, Math.min(cr.height - h - 4, cy - h / 2));
+    L.DomUtil.setPosition(el, mapa.containerPointToLayerPoint([x0, y0]));
+    const caja = [x0, y0, w, h];
     obst.push(caja); ocupado.push(caja);
   }
+  for (const el of [...pane.querySelectorAll("[data-grupo]")]) if (!usados.has(el.dataset.grupo)) el.remove();
   for (const [, m] of etiquetasEst) {   // los nombres de estación ceden ante los trenes
     const el = m.getTooltip() && m.getTooltip().getElement();
     if (!el || el.style.display === "none") continue;
