@@ -49,6 +49,8 @@ class Emtusa:
         self._token_ts = 0
         self.disponible = None      # None = sin probar; True/False según la última llamada de tiempo real
         self.error = None
+        self._veh = None
+        self._veh_ts = 0
         self.red_generada = None
         # red (estructura fija en disco)
         self.paradas_d = {}         # id(int) -> {id, nombre, lat, lon, lineas:[codigos]}
@@ -237,6 +239,39 @@ class Emtusa:
             if c not in out or m < out[c]:
                 out[c] = m
         return out
+
+    def vehiculos(self):
+        """Todos los autobuses en circulación ahora mismo, con su posición (para el mapa en vivo).
+
+        Fuente: autobuses/coordenadas de EMTUSA. Se cachea unos segundos porque muchos
+        navegadores pueden pedirlo a la vez."""
+        if not self.activo:
+            return {"disponible": False, "vehiculos": []}
+        with self.lock:
+            if self._veh is not None and time.time() - self._veh_ts < 6:
+                return self._veh
+        try:
+            arr = self._get("autobuses/coordenadas")
+            out = []
+            for b in arr:
+                lat, lon = b.get("latitud"), b.get("longitud")
+                if lat is None or lon is None:
+                    continue
+                out.append({"bus": str(b.get("numBus") or ""), "linea": b.get("codigo") or str(b.get("idlinea")),
+                            "linea_id": b.get("idlinea"),
+                            "color": "#" + (b.get("colorhex") or "666666").lstrip("#"),
+                            "destino": _limpia(b.get("destino")), "origen": _limpia(b.get("origen")),
+                            "nombre_linea": _limpia(b.get("nombreLinea")),
+                            "lat": float(lat), "lon": float(lon)})
+            res = {"disponible": True, "ts": int(time.time()), "vehiculos": out,
+                   "lineas_activas": len({v["linea"] for v in out})}
+            with self.lock:
+                self._veh, self._veh_ts = res, time.time()
+            self.disponible, self.error = True, None
+            return res
+        except Exception as e:  # noqa: BLE001
+            self.disponible, self.error = False, str(e)
+            return {"disponible": False, "error": str(e), "vehiculos": []}
 
     def enlace(self, lat, lon, radio_m=500, por_parada=3):
         """Paradas cercanas a un punto con sus próximas llegadas (panel tren+bus)."""

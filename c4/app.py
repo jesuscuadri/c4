@@ -227,6 +227,8 @@ def servir(app, abrir=True, en_red=False, publico=False):
                 return self._json({"ok": True, "hora": datetime.now().strftime("%H:%M:%S")})
             if ruta == "/api/bus/red":
                 return self._json(app.bus.resumen_red() if app.bus else {"error": "sin datos de bus"})
+            if ruta == "/api/bus/coordenadas":
+                return self._json(app.bus.vehiculos() if app.bus else {"disponible": False, "vehiculos": []})
             if ruta == "/api/bus/cercanas":
                 q = parse_qs(urlparse(self.path).query)
                 try:

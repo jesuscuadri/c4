@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#e2231a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Bus Gijón">
+<title>Autobuses de Gijón · EMTUSA en tiempo real</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23e2231a'/%3E%3Ctext x='32' y='45' font-family='Arial' font-weight='700' font-size='34' fill='white' text-anchor='middle'%3E%F0%9F%9A%8C%3C/text%3E%3C/svg%3E">
+<link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23e2231a'/%3E%3Ctext x='32' y='46' font-family='Arial' font-size='36' text-anchor='middle'%3E%F0%9F%9A%8C%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="bus.css">
+</head>
+<body>
+<header class="top">
+  <div class="top-in">
+    <div class="marca">
+      <span class="pill-bus">🚌</span>
+      <h1>Autobuses de Gijón <small>EMTUSA · posición y llegadas en tiempo real</small></h1>
+    </div>
+    <div class="estado">
+      <span class="chip" id="chip"><span class="dot"></span><span id="chip-txt">Cargando…</span></span>
+      <a class="btn-tren" href="/" title="Ir a la app del tren C-4">🚆 C-4</a>
+    </div>
+  </div>
+  <nav class="tabs" role="tablist">
+    <button role="tab" data-tab="vivo" aria-selected="true"><svg class="ico" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M5.6 5.6a9 9 0 0 0 0 12.8M18.4 18.4a9 9 0 0 0 0-12.8M8.5 8.5a5 5 0 0 0 0 7M15.5 15.5a5 5 0 0 0 0-7"/></svg><span>En vivo</span></button>
+    <button role="tab" data-tab="cerca"><svg class="ico" viewBox="0 0 24 24"><path d="M12 21s-7-6.5-7-11a7 7 0 0 1 14 0c0 4.5-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg><span>Cerca</span></button>
+    <button role="tab" data-tab="buscar"><svg class="ico" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.5-4.5"/></svg><span>Buscar</span></button>
+    <button role="tab" data-tab="lineas"><svg class="ico" viewBox="0 0 24 24"><path d="M5 6h14M5 12h14M5 18h14"/></svg><span>Líneas</span></button>
+    <button role="tab" data-tab="favoritos"><svg class="ico" viewBox="0 0 24 24"><path d="M12 4l2.4 5 5.6.6-4.2 3.8 1.2 5.6L12 21l-5 2.8 1.2-5.6L4 9.6 9.6 9z"/></svg><span>Favoritas</span></button>
+    <button role="tab" data-tab="tren"><svg class="ico" viewBox="0 0 24 24"><rect x="6" y="4" width="12" height="13" rx="3"/><path d="M6 11h12M9 21l-2 2M15 21l2 2"/><circle cx="9" cy="14" r="1"/><circle cx="15" cy="14" r="1"/></svg><span>Tren+Bus</span></button>
+  </nav>
+</header>
+
+<main>
+  <div id="avisos"></div>
+
+  <section id="tab-vivo">
+    <div class="panel panel-mapa">
+      <div class="mapa-barra">
+        <select id="mapa-linea" aria-label="Filtrar por línea"></select>
+        <button class="btn-ico" id="seguir" title="Centrar en mi ubicación">📍</button>
+        <span class="vivo-cont" id="vivo-cont"></span>
+      </div>
+      <div id="mapa"></div>
+      <div class="leyenda">
+        <span><span class="lg-bus"></span>Autobús en circulación (la flecha marca el sentido)</span>
+        <span><span class="lg-parada"></span>Parada</span>
+        <span class="sub" id="mapa-pie"></span>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-cerca" hidden>
+    <div class="panel">
+      <h2>Paradas cerca de ti</h2>
+      <p class="sub">Con tu ubicación, las paradas más cercanas y los próximos buses.</p>
+      <button class="btn-grande" id="loc">📍 Buscar paradas cerca de mí</button>
+      <div id="cerca-lista"></div>
+    </div>
+  </section>
+
+  <section id="tab-buscar" hidden>
+    <div class="panel">
+      <label class="campo"><span>Buscar parada</span>
+        <input id="q" type="search" placeholder="Nombre de la parada (p. ej. Humedal)" autocomplete="off"></label>
+      <div id="buscar-lista"></div>
+    </div>
+  </section>
+
+  <section id="tab-lineas" hidden>
+    <div class="panel">
+      <h2>Líneas de EMTUSA</h2>
+      <p class="sub">Toca una línea para ver su recorrido en el mapa, sus paradas y los buses que circulan ahora.</p>
+      <div id="lineas-lista" class="lineas-grid"></div>
+    </div>
+  </section>
+
+  <section id="tab-favoritos" hidden>
+    <div class="panel">
+      <h2>Paradas favoritas</h2>
+      <div id="fav-lista"></div>
+    </div>
+  </section>
+
+  <section id="tab-tren" hidden>
+    <div class="panel">
+      <h2>Del tren al bus</h2>
+      <p class="sub">Llegas a Gijón en la C-4 y enlazas con el bus urbano. Aquí tienes las próximas llegadas del tren y los buses en las paradas junto a la estación. Para una ruta puerta a puerta usa «Ir a…» en la app del tren.</p>
+      <div id="tren-bus"></div>
+    </div>
+  </section>
+
+  <p class="pie" id="pie"></p>
+</main>
+
+<div class="hoja" id="hoja" hidden>
+  <div class="hoja-fondo" id="hoja-fondo"></div>
+  <div class="hoja-caja" id="hoja-caja"></div>
+</div>
+<div class="toast" id="toast" hidden></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" defer></script>
+<script src="bus.js" defer></script>
+</body>
+</html>
