@@ -357,3 +357,31 @@ body.mapa-grande #mapa{flex:1;height:auto;border-radius:0;border:0}
 .apr-lista{margin-top:10px;border-top:1px solid var(--bd);display:grid;gap:2px}
 .apr-fila{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--bd);font-size:14px}
 .apr-fila b.mas{color:var(--warn)}.apr-fila b.menos{color:var(--ok)}
+
+/* ============================ Malla mejorada ============================ */
+:root{color-scheme:light dark}   /* barras de desplazamiento nativas oscuras en modo oscuro */
+#malla .banda-cruce{fill:color-mix(in srgb,var(--c4) 6%,transparent)}
+#malla svg text.km{fill:var(--mut);font-size:10px}
+#malla svg text.lbl{font-weight:800;font-size:11px;paint-order:stroke;stroke:var(--panel);stroke-width:3.5px;stroke-linejoin:round}
+#malla svg text.espera{font-weight:800;font-size:10.5px;paint-order:stroke;stroke:var(--panel);stroke-width:3.5px;stroke-linejoin:round}
+#malla svg text.ahora{fill:#fff;font-weight:800;font-size:10.5px}
+#malla svg text.cruce-t{fill:var(--warn);font-weight:800;font-size:10.5px;paint-order:stroke;stroke:var(--panel);stroke-width:3.5px}
+#malla .tr{cursor:pointer}
+#malla .tr .vis{fill:none;stroke-linejoin:round;stroke-linecap:round;transition:stroke-width .12s}
+#malla .tr:hover .vis{stroke-width:4.4;opacity:1!important}
+#malla .tr .hit{fill:none;stroke:transparent;stroke-width:14}
+#malla .tr .halo{fill:none;stroke-width:11;opacity:.2;stroke-linejoin:round;stroke-linecap:round}
+#malla .cruce{fill:var(--panel);stroke:var(--mut);stroke-width:2}
+#malla .cruce.malo{fill:var(--warnbg);stroke:var(--warn);stroke-width:2.4}
+#malla .pasado{fill:var(--panel);opacity:.45;pointer-events:none}
+.scroll-x{scrollbar-color:var(--bd2) transparent}
+/* malla: columna de estaciones fija + gráfico desplazable */
+#malla.scroll-x{overflow:visible;margin:0;padding:0}
+.malla-wrap{display:flex;align-items:flex-start}
+.malla-ejes{flex:0 0 auto;position:relative;z-index:1;background:var(--panel)}
+.malla-scroll{flex:1;min-width:0;overflow-x:auto;scrollbar-color:var(--bd2) transparent;-webkit-overflow-scrolling:touch}
+/* botón Bus del encabezado */
+.btn-bus{text-decoration:none;color:var(--tx);white-space:nowrap;display:inline-flex;align-items:center}
+@media (max-width:760px){.txt-bus{display:none}.btn-bus{padding:7px 10px}}
+.btn-bus{gap:5px}
+@media (max-width:600px){#malla .malla-ejes svg text{font-size:10.5px}}

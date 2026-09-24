@@ -25,7 +25,7 @@
     </div>
     <div class="estado">
       <span class="chip" id="chip"><span class="dot"></span><span id="chip-txt">Cargando…</span></span>
-      <a class="btn" href="/bus/" title="Autobuses de Gijón (EMTUSA) en tiempo real">🚌 Bus</a>
+      <a class="btn btn-bus" href="/bus/" title="Autobuses de Gijón (EMTUSA) en tiempo real">🚌<span class="txt-bus"> Bus</span></a>
       <button class="btn" id="btn-iphone" hidden title="Abrir en el iPhone">📱 iPhone</button>
       <span class="reloj num" id="reloj">--:--</span>
     </div>
@@ -128,14 +128,20 @@
           <button data-v="360" aria-pressed="false">6 h</button>
         </div>
         <label style="font-size:13px;color:var(--tx2)"><input type="checkbox" id="ver-prog" checked> Mostrar horario oficial</label>
+        <label style="font-size:13px;color:var(--tx2)"><input type="checkbox" id="ver-mio" checked> Resaltar mi tren</label>
       </div>
       <div id="malla" class="scroll-x"></div>
       <div class="leyenda">
         <span><svg width="26" height="8"><line x1="0" y1="4" x2="26" y2="4" stroke="var(--ida)" stroke-width="2.5"/></svg>Hacia Cudillero / Avilés</span>
         <span><svg width="26" height="8"><line x1="0" y1="4" x2="26" y2="4" stroke="var(--vta)" stroke-width="2.5"/></svg>Hacia Gijón</span>
+        <span><svg width="26" height="10"><line x1="0" y1="5" x2="26" y2="5" stroke="var(--ida)" stroke-width="8" opacity=".22"/><line x1="0" y1="5" x2="26" y2="5" stroke="var(--ida)" stroke-width="3.5"/></svg>★ Tu tren (el próximo de «Mi viaje»)</span>
         <span><svg width="26" height="8"><line x1="0" y1="4" x2="26" y2="4" stroke="var(--mut)" stroke-dasharray="3 3"/></svg>Horario oficial</span>
-        <span><svg width="12" height="12"><circle cx="6" cy="6" r="4" fill="none" stroke="var(--warn)" stroke-width="2"/></svg>Cruce</span>
+        <span><b style="color:var(--ida)">‖ 4'</b>Espera por cruce o vía única</span>
+        <span><svg width="14" height="14"><circle cx="7" cy="7" r="5" fill="var(--panel)" stroke="var(--mut)" stroke-width="2"/></svg>Cruce</span>
+        <span><svg width="14" height="14"><circle cx="7" cy="7" r="5" fill="var(--warnbg)" stroke="var(--warn)" stroke-width="2.4"/></svg>Cruce que añade retraso (+min)</span>
+        <span><span style="display:inline-block;width:18px;height:10px;background:var(--mut);opacity:.35;border-radius:2px"></span>Ya pasado</span>
       </div>
+      <p class="sub" style="margin-top:8px">Las estaciones están a escala real (km a la derecha): cuanto más inclinada la línea, más rápido va el tren. Toca cualquier línea para ver el tren completo.</p>
     </div>
   </section>
 

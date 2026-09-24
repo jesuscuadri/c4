@@ -93,7 +93,7 @@ function pintarEstado() {
   if (R.calidad === "congelado")
     h += `<div class="aviso warn"><span>⚠</span><div><b>Los datos en tiempo real de Renfe están parados</b> (último dato ${R.ts_feed || "?"}). Mientras tanto se calcula con el horario, así que las esperas por cruces con trenes retrasados no se ven.</div></div>`;
   if (R.calidad === "sin_conexion")
-    h += `<div class="aviso bad"><span>⚠</span><div><b>No hay conexión con Renfe.</b> ${esc(R.error || "")} Se muestra el horario oficial.</div></div>`;
+    h += `<div class="aviso bad" title="${esc(R.error || "")}"><span>⚠</span><div><b>No se puede leer el tiempo real de Renfe ahora mismo.</b> Mientras tanto se muestra el horario oficial; en cuanto vuelva, se actualiza solo.</div></div>`;
   for (const a of R.avisos || []) h += `<div class="aviso info"><span>ℹ</span><div><b>Aviso de Renfe:</b> ${esc(a)}</div></div>`;
   $("avisos").innerHTML = h;
   $("pie").textContent = `Datos: Renfe (horario oficial GTFS y tiempo real) · actualizado ${R.actualizado} · ` +
@@ -585,19 +585,43 @@ function pintarTrenesMapa() {
 /* ---------------------------------------------------------------- malla */
 function pintarMalla() {
   const cont = $("malla"), E = LINEA.estaciones, now = ahora();
-  const vent = leer("ventana", 180), verProg = $("ver-prog").checked;
-  const W = Math.max(760, cont.clientWidth || 900), top = 12, filaH = 19, left = 128, right = 12;
-  const H = top + (E.length - 1) * filaH + 34;
+  const vent = leer("ventana", 180), verProg = $("ver-prog").checked, resaltar = $("ver-mio").checked;
+  const ancho = cont.clientWidth || 900, estrecho = ancho < 600;
+  const left = estrecho ? 112 : 132, right = 38, top = 32, L0 = 6;   // left = columna fija de estaciones
+  const W = Math.max(ancho - left, estrecho ? 600 : 640);              // ancho del gráfico (desplazable)
+  // Estaciones a escala real (km): la pendiente de cada línea es la velocidad del tren.
+  // Separación mínima para que no se pisen los nombres de estaciones muy próximas.
+  const minGap = 13, alto = Math.max(460, (E.length - 1) * 20);
+  const kmTot = Math.max(1e-6, E[E.length - 1].km - E[0].km);
+  const Y = [top];
+  for (let i = 1; i < E.length; i++) Y.push(Y[i - 1] + Math.max(minGap, ((E[i].km - E[i - 1].km) / kmTot) * alto));
+  const H = Y[Y.length - 1] + 36;
   const t0 = now - vent * 0.2, t1 = now + vent * 0.8;
-  const x = (t) => left + ((t - t0) / (t1 - t0)) * (W - left - right), y = (k) => top + k * filaH;
+  const x = (t) => L0 + ((t - t0) / (t1 - t0)) * (W - L0 - right), y = (k) => Y[k];
+  const yKm = (kx) => {
+    if (kx <= E[0].km) return Y[0];
+    for (let i = 0; i < E.length - 1; i++)
+      if (E[i].km <= kx && kx <= E[i + 1].km) return Y[i] + ((kx - E[i].km) / Math.max(1e-9, E[i + 1].km - E[i].km)) * (Y[i + 1] - Y[i]);
+    return Y[E.length - 1];
+  };
   const paso = vent <= 90 ? 10 : vent <= 180 ? 15 : 30;
-  let s = `<svg width="${W}" height="${H}" style="display:block" role="img" aria-label="Malla de circulación">`;
-  for (let t = Math.ceil(t0 / paso) * paso; t <= t1; t += paso)
-    s += `<line x1="${x(t)}" y1="${top}" x2="${x(t)}" y2="${H - 22}" stroke="var(--bd)"/><text x="${x(t)}" y="${H - 6}" text-anchor="middle">${hm(t)}</text>`;
+  // «tu tren»: el próximo del trayecto elegido en Mi viaje
+  let mio = null;
+  const o = +$("o").value, d = +$("d").value;
+  if (resaltar && o !== d) { const v = viajesEntre(o, d, 1); if (v.length) mio = v[0].t.id; }
+
+  let ejes = `<svg width="${left}" height="${H}" style="display:block" aria-hidden="true">`;
   for (const e of E)
-    s += `<line x1="${left}" y1="${y(e.k)}" x2="${W - right}" y2="${y(e.k)}" stroke="var(--bd${e.cruce ? "2" : ""})" stroke-width="${e.cruce ? 1.2 : 0.5}"/>` +
-      `<text x="${left - 8}" y="${y(e.k) + 4}" text-anchor="end" class="${e.cruce ? "est-cruce" : ""}">${esc(nombreCorto(e.nombre).slice(0, 19))}</text>`;
-  s += `<clipPath id="recorte"><rect x="${left}" y="0" width="${W - left - right}" height="${H}"/></clipPath><g clip-path="url(#recorte)">`;
+    ejes += `<text x="${left - 8}" y="${y(e.k) + 4}" text-anchor="end" class="${e.cruce ? "est-cruce" : ""}">${esc(((n, m) => n.length > m ? n.slice(0, m - 1) + "…" : n)(nombreCorto(e.nombre), estrecho ? 16 : 21))}</text>`;
+  ejes += `</svg>`;
+  let s = `<svg width="${W}" height="${H}" style="display:block" role="img" aria-label="Malla de circulación">`;
+  for (const e of E) if (e.cruce) s += `<rect x="${L0}" y="${y(e.k) - 5}" width="${W - L0 - right}" height="10" class="banda-cruce"/>`;
+  for (let t = Math.ceil(t0 / paso) * paso; t <= t1; t += paso)
+    s += `<line x1="${x(t)}" y1="${top - 8}" x2="${x(t)}" y2="${H - 22}" stroke="var(--bd)"/><text x="${x(t)}" y="${H - 6}" text-anchor="middle">${hm(t)}</text>`;
+  for (const e of E)
+    s += `<line x1="${L0}" y1="${y(e.k)}" x2="${W - right}" y2="${y(e.k)}" stroke="var(--bd${e.cruce ? "2" : ""})" stroke-width="${e.cruce ? 1.2 : 0.5}"/>` +
+      `<text x="${W - right + 5}" y="${y(e.k) + 4}" class="km">${Math.round(e.km)}</text>`;
+  s += `<clipPath id="recorte"><rect x="${L0}" y="0" width="${W - L0 - right}" height="${H}"/></clipPath><g clip-path="url(#recorte)">`;
   const camino = (t, A, D, desde) => {
     const p = [];
     for (let j = desde; j < t.k.length; j++) {
@@ -606,31 +630,65 @@ function pintarMalla() {
     }
     return p.map((q, i) => (i ? "L" : "M") + q[0].toFixed(1) + " " + q[1].toFixed(1)).join("");
   };
+  const encima = [];   // etiquetas, posiciones y cruces: siempre por encima de las líneas
+  let capaMio = "";
   for (const t of R.trenes) {
     const fin = t.est_a[t.k.length - 1] ?? t.prog_a[t.k.length - 1];
     if (Math.max(fin, t.prog_a[t.k.length - 1]) < t0 || Math.min(t.prog_d[0], t.est_d[0] ?? 1e9) > t1) continue;
     if (verProg) s += `<path d="${camino(t, t.prog_a, t.prog_d, 0)}" fill="none" stroke="var(--mut)" stroke-width="1" stroke-dasharray="3 3" opacity=".55"/>`;
-    if (!t.fin && !t.cancelado) {
-      const c = colorDir(t.dir);
-      s += `<path d="${camino(t, t.est_a, t.est_d, Math.max(0, t.j0 - 1))}" fill="none" stroke="${c}" stroke-width="2.4" opacity="${t.con_datos ? 1 : 0.6}" style="cursor:pointer" data-tren="${t.id}"><title>Tren ${t.num} → ${esc(t.destino)} · ${esc(t.situacion)}</title></path>`;
-      const kx = kmTren(t, now);
-      if (kx != null) {
-        let kk = 0; // posición vertical: interpolar entre estaciones por km
-        for (let i = 0; i < E.length - 1; i++) if (E[i].km <= kx && kx <= E[i + 1].km) { kk = i + (kx - E[i].km) / Math.max(1e-9, E[i + 1].km - E[i].km); break; }
-        if (kx >= E[E.length - 1].km) kk = E.length - 1;
-        const yy = top + kk * filaH;
-        s += `<circle cx="${x(now)}" cy="${yy}" r="4.5" fill="${c}"/><text x="${x(now) + 7}" y="${yy + 4}" style="fill:${c};font-weight:700">${t.num}</text>`;
+    if (t.fin || t.cancelado) continue;
+    const c = colorDir(t.dir), esMio = t.id === mio;
+    const dd = camino(t, t.est_a, t.est_d, Math.max(0, t.j0 - 1));
+    if (!dd) continue;
+    const op = mio && !esMio ? 0.55 : (t.con_datos ? 1 : 0.6);
+    const ret = t.con_datos && t.retraso >= 1 ? ` · +${Math.round(t.retraso)} min` : "";
+    const g = `<g class="tr${esMio ? " mio" : ""}" data-tren="${t.id}">` +
+      (esMio ? `<path d="${dd}" class="halo" stroke="${c}"/>` : "") +
+      `<path d="${dd}" class="vis" stroke="${c}" stroke-width="${esMio ? 4 : 2.4}" opacity="${op}"/>` +
+      `<path d="${dd}" class="hit"/><title>Tren ${t.num} → ${esc(t.destino)}${ret} · ${esc(t.situacion)}${esMio ? " · TU TREN" : ""}</title></g>`;
+    if (esMio) capaMio = g; else s += g;
+    // esperas explicadas (cruce, vía única, tren delante): se ven como tramos horizontales
+    for (const m of t.motivos) {
+      if (m.min < 1) continue;
+      const dj = t.est_d[m.j], aj = t.est_a[m.j] ?? dj;
+      if (dj == null || dj < t0 || aj > t1) continue;
+      encima.push(`<text x="${(x(aj) + x(dj)) / 2}" y="${y(t.k[m.j]) - 7}" text-anchor="middle" class="espera" style="fill:${c}${mio && !esMio ? ";opacity:.5" : ""}">‖ ${Math.round(m.min)}'</text>`);
+    }
+    const lbl = `${esMio ? "★ " : ""}${t.num}${t.con_datos && t.retraso >= 1 ? " +" + Math.round(t.retraso) : ""}`;
+    const kx = kmTren(t, now);
+    if (kx != null) {
+      const yy = yKm(kx);
+      encima.push(`<circle cx="${x(now)}" cy="${yy}" r="${esMio ? 6 : 4.5}" fill="${c}" stroke="var(--panel)" stroke-width="1.5"/>` +
+        `<text x="${x(now) + 8}" y="${yy + 4}" class="lbl" style="fill:${c}${mio && !esMio ? ";opacity:.55" : ""}">${lbl}</text>`);
+    } else {
+      // aún no ha salido: nombre al principio de su línea
+      const j = t.k.findIndex((_, i) => { const tt = t.est_d[i] ?? t.est_a[i]; return tt != null && tt >= t0; });
+      if (j >= 0) {
+        const tt = t.est_d[j] ?? t.est_a[j];
+        if (tt <= t1) encima.push(`<text x="${x(tt) + 4}" y="${y(t.k[j]) + (t.dir > 0 ? 13 : -6)}" class="lbl" style="fill:${c}${mio && !esMio ? ";opacity:.55" : ""}">${lbl}</text>`);
       }
     }
   }
   for (const c of R.cruces || []) {
     if (c.hora < t0 || c.hora > t1) continue;
-    const malo = c.ida.retraso_extra > 0.5 || c.vuelta.retraso_extra > 0.5;
-    s += `<circle cx="${x(c.hora)}" cy="${y(c.k)}" r="5" fill="none" stroke="var(--${malo ? "warn" : "mut"})" stroke-width="2"><title>Cruce ${c.ida.num} / ${c.vuelta.num} en ${esc(c.estacion)} · ${hm(c.hora)}</title></circle>`;
+    const extra = Math.max(c.ida.retraso_extra || 0, c.vuelta.retraso_extra || 0), malo = extra > 0.5;
+    encima.push(`<g><circle cx="${x(c.hora)}" cy="${y(c.k)}" r="${malo ? 6 : 5}" class="cruce${malo ? " malo" : ""}"/>` +
+      (malo ? `<text x="${x(c.hora)}" y="${y(c.k) + 18}" text-anchor="middle" class="cruce-t">+${Math.round(extra)}'</text>` : "") +
+      `<title>Cruce ${c.ida.num} ↔ ${c.vuelta.num} en ${esc(c.estacion)} · ${hm(c.hora)}${malo ? ` · añade ${Math.round(extra)} min de retraso` : ""}${c.info === "movido" ? " · cruce trasladado" : ""}</title></g>`);
   }
-  s += `</g><line x1="${x(now)}" y1="${top - 6}" x2="${x(now)}" y2="${H - 22}" stroke="var(--c4)" stroke-width="1.6"/>` +
-    `<text x="${x(now)}" y="${top - 1}" text-anchor="middle" style="fill:var(--c4);font-weight:700;font-size:10px"></text></svg>`;
-  cont.innerHTML = s;
+  s += capaMio;
+  s += `<rect x="${L0}" y="0" width="${Math.max(0, x(now) - L0)}" height="${H - 22}" class="pasado"/>`;
+  s += encima.join("");
+  s += `</g><line x1="${x(now)}" y1="${top - 12}" x2="${x(now)}" y2="${H - 22}" stroke="var(--c4)" stroke-width="1.6"/>` +
+    `<rect x="${x(now) - 42}" y="${top - 30}" width="84" height="18" rx="9" fill="var(--c4)"/>` +
+    `<text x="${x(now)}" y="${top - 17}" text-anchor="middle" class="ahora">Ahora ${hm(now)}</text>` +
+    `<text x="${W - right + 5}" y="${top - 17}" class="km">km</text></svg>`;
+  // conserva el desplazamiento entre refrescos; la primera vez, «ahora» cerca del borde izquierdo
+  const prev = cont.querySelector(".malla-scroll"), clave = vent + "|" + W;
+  const sl = prev && pintarMalla._clave === clave ? prev.scrollLeft : Math.max(0, x(now) - 60);
+  pintarMalla._clave = clave;
+  cont.innerHTML = `<div class="malla-wrap"><div class="malla-ejes">${ejes}</div><div class="malla-scroll">${s}</div></div>`;
+  cont.querySelector(".malla-scroll").scrollLeft = sl;
 }
 
 /* ---------------------------------------------------------------- cruces */
@@ -913,6 +971,8 @@ $("andar").onchange = $("andar").oninput = () => {
 $("invertir").onclick = () => { const a = $("o").value; $("o").value = $("d").value; $("d").value = a; $("o").onchange(); };
 $("est").onchange = () => { guardar("est", +$("est").value); pintarEstacion(); };
 $("ver-prog").onchange = pintarMalla;
+$("ver-mio").checked = leer("malla.mio", true);
+$("ver-mio").onchange = () => { guardar("malla.mio", $("ver-mio").checked); pintarMalla(); };
 for (const b of document.querySelectorAll("#ventana button")) b.onclick = () => {
   guardar("ventana", +b.dataset.v);
   for (const x of document.querySelectorAll("#ventana button")) x.setAttribute("aria-pressed", x === b);
