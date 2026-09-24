@@ -385,3 +385,4 @@ body.mapa-grande #mapa{flex:1;height:auto;border-radius:0;border:0}
 @media (max-width:760px){.txt-bus{display:none}.btn-bus{padding:7px 10px}}
 .btn-bus{gap:5px}
 @media (max-width:600px){#malla .malla-ejes svg text{font-size:10.5px}}
+#malla .tr .cab{fill:none;stroke-width:2.2;stroke-dasharray:2 5;stroke-linecap:round}

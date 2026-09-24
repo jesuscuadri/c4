@@ -622,63 +622,97 @@ function pintarMalla() {
     s += `<line x1="${L0}" y1="${y(e.k)}" x2="${W - right}" y2="${y(e.k)}" stroke="var(--bd${e.cruce ? "2" : ""})" stroke-width="${e.cruce ? 1.2 : 0.5}"/>` +
       `<text x="${W - right + 5}" y="${y(e.k) + 4}" class="km">${Math.round(e.km)}</text>`;
   s += `<clipPath id="recorte"><rect x="${L0}" y="0" width="${W - L0 - right}" height="${H}"/></clipPath><g clip-path="url(#recorte)">`;
-  const camino = (t, A, D, desde) => {
+  const camino = (t, A, D, desde, sinLlegada0) => {
     const p = [];
     for (let j = desde; j < t.k.length; j++) {
-      if (A[j] != null) p.push([x(A[j]), y(t.k[j])]);
+      if (A[j] != null && !(sinLlegada0 && j === desde)) p.push([x(A[j]), y(t.k[j])]);
       if (D[j] != null && Math.abs(D[j] - A[j]) > 0.01) p.push([x(D[j]), y(t.k[j])]);
     }
     return p.map((q, i) => (i ? "L" : "M") + q[0].toFixed(1) + " " + q[1].toFixed(1)).join("");
   };
-  const encima = [];   // etiquetas, posiciones y cruces: siempre por encima de las líneas
+  // ---- etiquetas sin solapes: cada texto busca un hueco libre cerca de su sitio
+  const cajas = [], puntos = [], textos = [];
+  const libre = (bx, by, w, h) => !cajas.some((b) => bx < b[0] + b[2] && bx + w > b[0] && by < b[1] + b[3] && by + h > b[1]);
+  const ocupar = (cx, cy, r) => cajas.push([cx - r, cy - r, 2 * r, 2 * r]);
+  const poner = (it) => {   // {x, y, txt, cls, fill, op, anchor, offs, forzar, guia:[x,y], prio}
+    const fs = 11, w = it.txt.length * fs * 0.62 + 4, h = 12;
+    let anchor = it.anchor || "start", xx = it.x;
+    let bx = anchor === "middle" ? xx - w / 2 : anchor === "end" ? xx - w : xx;
+    if (bx + w > W - right - 2) { anchor = "end"; xx = Math.min(it.x, W - right - 2); bx = xx - w; }
+    if (bx < L0 + 2) { anchor = "start"; xx = L0 + 2; bx = xx; }
+    for (const dy of it.offs || [0, -12, 12, -24, 24]) {
+      const by = it.y + dy - 9;
+      if (by < 2 || by + h > H - 24) continue;
+      if (libre(bx, by, w, h)) { cajas.push([bx, by, w, h]); return emitir(it, xx, it.y + dy, anchor, dy); }
+    }
+    if (it.forzar) { cajas.push([bx, it.y - 9, w, h]); return emitir(it, xx, it.y, anchor, 0); }
+    return "";
+  };
+  const emitir = (it, xx, yy, anchor, dy) =>
+    (dy && it.guia ? `<line x1="${it.guia[0]}" y1="${it.guia[1]}" x2="${anchor === "end" ? xx + 2 : xx - 2}" y2="${yy - 4}" stroke="${it.fill}" stroke-width="1" opacity="${0.6 * (it.op ?? 1)}"/>` : "") +
+    `<text x="${xx}" y="${yy}" text-anchor="${anchor}" class="${it.cls}" style="fill:${it.fill};opacity:${it.op ?? 1}">${esc(it.txt)}</text>`;
+  cajas.push([x(now) - 44, 0, 88, top - 10]);   // hueco del chip «Ahora»
   let capaMio = "";
   for (const t of R.trenes) {
     const fin = t.est_a[t.k.length - 1] ?? t.prog_a[t.k.length - 1];
     if (Math.max(fin, t.prog_a[t.k.length - 1]) < t0 || Math.min(t.prog_d[0], t.est_d[0] ?? 1e9) > t1) continue;
-    if (verProg) s += `<path d="${camino(t, t.prog_a, t.prog_d, 0)}" fill="none" stroke="var(--mut)" stroke-width="1" stroke-dasharray="3 3" opacity=".55"/>`;
+    if (verProg) s += `<path d="${camino(t, t.prog_a, t.prog_d, 0)}" fill="none" stroke="var(--mut)" stroke-width="1" stroke-dasharray="3 3" opacity=".32"/>`;
     if (t.fin || t.cancelado) continue;
-    const c = colorDir(t.dir), esMio = t.id === mio;
-    const dd = camino(t, t.est_a, t.est_d, Math.max(0, t.j0 - 1));
+    const c = colorDir(t.dir), esMio = t.id === mio, tenue = mio && !esMio;
+    const desde = Math.max(0, t.j0 - 1);
+    const A0 = t.est_a[0], D0 = t.est_d[0];
+    // parado en la estación de origen esperando para salir: se dibuja discontinuo, no como si circulara
+    const enCab = desde === 0 && A0 != null && D0 != null && D0 - A0 > 1 && D0 > now - 0.5;
+    const dd = camino(t, t.est_a, t.est_d, desde, enCab);
     if (!dd) continue;
-    const op = mio && !esMio ? 0.55 : (t.con_datos ? 1 : 0.6);
+    const op = tenue ? 0.55 : (t.con_datos ? 1 : 0.6);
     const ret = t.con_datos && t.retraso >= 1 ? ` · +${Math.round(t.retraso)} min` : "";
+    const cab = enCab ? `<path d="M${x(Math.max(A0, t0)).toFixed(1)} ${y(t.k[0])}L${x(D0).toFixed(1)} ${y(t.k[0])}" class="cab" stroke="${c}" opacity="${op}"/>` : "";
     const g = `<g class="tr${esMio ? " mio" : ""}" data-tren="${t.id}">` +
-      (esMio ? `<path d="${dd}" class="halo" stroke="${c}"/>` : "") +
+      (esMio ? `<path d="${dd}" class="halo" stroke="${c}"/>` : "") + cab +
       `<path d="${dd}" class="vis" stroke="${c}" stroke-width="${esMio ? 4 : 2.4}" opacity="${op}"/>` +
-      `<path d="${dd}" class="hit"/><title>Tren ${t.num} → ${esc(t.destino)}${ret} · ${esc(t.situacion)}${esMio ? " · TU TREN" : ""}</title></g>`;
+      `<path d="${dd}" class="hit"/>${enCab ? `<path d="M${x(Math.max(A0, t0)).toFixed(1)} ${y(t.k[0])}L${x(D0).toFixed(1)} ${y(t.k[0])}" class="hit"/>` : ""}` +
+      `<title>Tren ${t.num} → ${esc(t.destino)}${ret} · ${esc(t.situacion)}${esMio ? " · TU TREN" : ""}</title></g>`;
     if (esMio) capaMio = g; else s += g;
-    // esperas explicadas (cruce, vía única, tren delante): se ven como tramos horizontales
+    const prio = esMio ? 0 : 1, lbl = `${esMio ? "★ " : ""}${t.num}${t.con_datos && t.retraso >= 1 ? " +" + Math.round(t.retraso) : ""}`;
+    // esperas que no son un cruce (el cruce ya lleva su círculo con los minutos)
     for (const m of t.motivos) {
-      if (m.min < 1) continue;
+      if (m.min < 1 || m.tipo === "cruce") continue;
       const dj = t.est_d[m.j], aj = t.est_a[m.j] ?? dj;
       if (dj == null || dj < t0 || aj > t1) continue;
-      encima.push(`<text x="${(x(aj) + x(dj)) / 2}" y="${y(t.k[m.j]) - 7}" text-anchor="middle" class="espera" style="fill:${c}${mio && !esMio ? ";opacity:.5" : ""}">‖ ${Math.round(m.min)}'</text>`);
+      textos.push({ prio: 4, x: (x(Math.max(aj, t0)) + x(dj)) / 2, y: y(t.k[m.j]) - 6, txt: `‖ ${Math.round(m.min)}'`, cls: "espera", fill: c, op: tenue ? 0.5 : 1, anchor: "middle", offs: [0, -11] });
     }
-    const lbl = `${esMio ? "★ " : ""}${t.num}${t.con_datos && t.retraso >= 1 ? " +" + Math.round(t.retraso) : ""}`;
     const kx = kmTren(t, now);
     if (kx != null) {
       const yy = yKm(kx);
-      encima.push(`<circle cx="${x(now)}" cy="${yy}" r="${esMio ? 6 : 4.5}" fill="${c}" stroke="var(--panel)" stroke-width="1.5"/>` +
-        `<text x="${x(now) + 8}" y="${yy + 4}" class="lbl" style="fill:${c}${mio && !esMio ? ";opacity:.55" : ""}">${lbl}</text>`);
+      puntos.push(`<circle cx="${x(now)}" cy="${yy}" r="${esMio ? 6 : 4.5}" fill="${c}" stroke="var(--panel)" stroke-width="1.5"/>`);
+      ocupar(x(now), yy, esMio ? 7 : 5.5);
+      textos.push({ prio, x: x(now) + 9, y: yy + 4, txt: enCab ? `${lbl} · sale ${hm(D0)}` : lbl, cls: "lbl", fill: c, op: tenue ? 0.6 : 1,
+                    offs: enCab ? (t.dir > 0 ? [13, 26, -13] : [-13, -26, 13]) : [0, 13, -13, 26, -26, 39, -39], forzar: esMio, guia: [x(now) + 5, yy] });
+    } else if (enCab) {
+      textos.push({ prio: 2, x: x(D0) + 5, y: y(t.k[0]) + (t.dir > 0 ? 13 : -5), txt: `${lbl} · sale ${hm(D0)}`, cls: "lbl", fill: c, op: tenue ? 0.6 : 1 });
     } else {
-      // aún no ha salido: nombre al principio de su línea
       const j = t.k.findIndex((_, i) => { const tt = t.est_d[i] ?? t.est_a[i]; return tt != null && tt >= t0; });
       if (j >= 0) {
         const tt = t.est_d[j] ?? t.est_a[j];
-        if (tt <= t1) encima.push(`<text x="${x(tt) + 4}" y="${y(t.k[j]) + (t.dir > 0 ? 13 : -6)}" class="lbl" style="fill:${c}${mio && !esMio ? ";opacity:.55" : ""}">${lbl}</text>`);
+        if (tt <= t1 && tt >= now - 1) textos.push({ prio: 2, x: x(tt) + 5, y: y(t.k[j]) + (t.dir > 0 ? 13 : -5), txt: lbl, cls: "lbl", fill: c, op: tenue ? 0.6 : 1 });
       }
     }
   }
   for (const c of R.cruces || []) {
     if (c.hora < t0 || c.hora > t1) continue;
     const extra = Math.max(c.ida.retraso_extra || 0, c.vuelta.retraso_extra || 0), malo = extra > 0.5;
-    encima.push(`<g><circle cx="${x(c.hora)}" cy="${y(c.k)}" r="${malo ? 6 : 5}" class="cruce${malo ? " malo" : ""}"/>` +
-      (malo ? `<text x="${x(c.hora)}" y="${y(c.k) + 18}" text-anchor="middle" class="cruce-t">+${Math.round(extra)}'</text>` : "") +
-      `<title>Cruce ${c.ida.num} ↔ ${c.vuelta.num} en ${esc(c.estacion)} · ${hm(c.hora)}${malo ? ` · añade ${Math.round(extra)} min de retraso` : ""}${c.info === "movido" ? " · cruce trasladado" : ""}</title></g>`);
+    const cx = x(c.hora), cy = y(c.k);
+    puntos.push(`<g><circle cx="${cx}" cy="${cy}" r="${malo ? 6 : 5}" class="cruce${malo ? " malo" : ""}"/>` +
+      `<title>Cruce ${c.ida.num} ↔ ${c.vuelta.num} en ${esc(c.estacion)} · ${hm(c.hora)}${malo ? ` · añade ${Math.round(extra)} min de espera` : ""}${c.info === "movido" ? " · cruce trasladado" : ""}</title></g>`);
+    ocupar(cx, cy, 7);
+    if (malo) textos.push({ prio: 3, x: cx, y: cy + 19, txt: `+${Math.round(extra)}'`, cls: "cruce-t", fill: "var(--warn)", anchor: "middle", offs: [0, -26, 12], forzar: true });
   }
+  textos.sort((a, b) => a.prio - b.prio);
+  const capaTxt = textos.map(poner).join("");
   s += capaMio;
   s += `<rect x="${L0}" y="0" width="${Math.max(0, x(now) - L0)}" height="${H - 22}" class="pasado"/>`;
-  s += encima.join("");
+  s += puntos.join("") + capaTxt;
   s += `</g><line x1="${x(now)}" y1="${top - 12}" x2="${x(now)}" y2="${H - 22}" stroke="var(--c4)" stroke-width="1.6"/>` +
     `<rect x="${x(now) - 42}" y="${top - 30}" width="84" height="18" rx="9" fill="var(--c4)"/>` +
     `<text x="${x(now)}" y="${top - 17}" text-anchor="middle" class="ahora">Ahora ${hm(now)}</text>` +
