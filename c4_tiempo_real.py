@@ -14,6 +14,7 @@ Solo necesita Python 3.8 o superior (biblioteca estándar).
 import argparse
 import glob
 import os
+import signal
 import sys
 import threading
 import time
@@ -91,6 +92,15 @@ def main():
         return
     # el horario se prepara en segundo plano: la web abre ya y muestra «Preparando el horario…»
     threading.Thread(target=app.bucle, daemon=True).start()
+    if en_internet:
+        # Render avisa con SIGTERM antes de dormir o redesplegar el servidor: último guardado
+        def al_apagar(signum, frame):
+            print("Apagando: guardando lo aprendido…")
+            try:
+                app.almacen.guardar()
+            finally:
+                os._exit(0)
+        signal.signal(signal.SIGTERM, al_apagar)
     try:
         servir(app, abrir=not (args.sin_navegador or en_internet), en_red=args.movil or en_internet,
                publico=en_internet)

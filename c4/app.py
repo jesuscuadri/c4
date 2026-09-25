@@ -15,10 +15,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from . import gtfs
 from . import planificador
 from .estimador import Estimador
-from .historial import Precision, aprender_tiempos, aprender_sesgos, guardar_observaciones
+from .historial import (Precision, aprender_salidas, aprender_sesgos, aprender_tiempos,
+                        guardar_observaciones, guardar_resumen, resumen)
 from .linea import Linea
 from .tiemporeal import TiempoReal
 from .emtusa import Emtusa
+from .persistencia import Almacen, ciclo_guardado
 from .util import RAIZ, WEB, http_get, ahora_min
 
 VERSION = "2.2"
@@ -37,6 +39,8 @@ class App:
         self.precision = Precision()
         self.aprendidos = {}
         self.sesgos = {}
+        self.salidas = {}
+        self.almacen = Almacen()               # guarda lo aprendido fuera del servidor (GitHub)
         self.ultimo_aprendizaje = 0
         self.errores_seguidos = 0
         self.url_movil = None
@@ -57,12 +61,10 @@ class App:
             return
         datos = gtfs.extraer(self.cfg, hoy)
         linea = Linea(self.cfg, datos)
-        self.aprendidos = aprender_tiempos() if self.cfg["usar_tiempos_aprendidos"] else {}
-        self.sesgos = aprender_sesgos() if self.cfg.get("usar_correccion_sesgo") else {}
-        self.ultimo_aprendizaje = time.time()
+        self.aprender()
         with self.lock:
             self.linea = linea
-            self.est = Estimador(linea, self.cfg, self.aprendidos, self.sesgos)
+            self.est = Estimador(linea, self.cfg, self.aprendidos, self.sesgos, self.salidas)
             self.rt = TiempoReal(self.cfg)
             self.precision = Precision()
             self.dia = hoy
@@ -95,13 +97,8 @@ class App:
             except Exception as e:  # noqa: BLE001
                 print("Aviso (historial):", e)
         if time.time() - self.ultimo_aprendizaje > 3600:
-            if self.cfg["usar_tiempos_aprendidos"]:
-                self.aprendidos = aprender_tiempos()
-                self.est.aprendidos = self.aprendidos
-            if self.cfg.get("usar_correccion_sesgo"):
-                self.sesgos = aprender_sesgos()
-                self.est.sesgos = self.sesgos
-            self.ultimo_aprendizaje = time.time()
+            self.aprender()
+            self.est.aprendidos, self.est.sesgos, self.est.salidas = self.aprendidos, self.sesgos, self.salidas
         calidad = self.rt.calidad()
         if calidad == "congelado":  # Renfe no actualiza: mejor el horario que datos viejos
             self.rt.pos, self.rt.act = {}, {}
@@ -120,11 +117,25 @@ class App:
             "en_circulacion": sum(1 for t in res["trenes"] if not t["fin"] and t["j0"] > 0 or t["parado"] and not t["fin"] and t["con_datos"]),
             "tramos_aprendidos": len(self.aprendidos),
             "sesgos_corregidos": len(self.sesgos),
+            "salidas_aprendidas": len(self.salidas),
             "modo_cruces": self.cfg["cruces"],
             "ts": round(time.time()),
         })
         with self.lock:
             self.res = res
+
+    def aprender(self):
+        """Recalcula todo lo aprendido: tiempos de marcha reales, retraso típico de cada servicio
+        y corrección de sesgos a partir de los errores. Deja el resumen en disco (para guardarlo fuera)."""
+        try:
+            res = guardar_resumen(resumen())
+        except Exception as e:  # noqa: BLE001
+            print("Aviso (aprendizaje):", e)
+            res = None
+        self.aprendidos = aprender_tiempos(res=res) if self.cfg["usar_tiempos_aprendidos"] else {}
+        self.salidas = aprender_salidas(res=res) if self.cfg.get("usar_retraso_tipico", True) else {}
+        self.sesgos = aprender_sesgos() if self.cfg.get("usar_correccion_sesgo") else {}
+        self.ultimo_aprendizaje = time.time()
 
     def manana(self, o_id, d_id):
         """Primeros trenes de mañana entre dos estaciones (para cuando ya no quedan hoy)."""
@@ -152,7 +163,10 @@ class App:
                   for s, m in sorted(se.items(), key=lambda kv: -abs(kv[1]))]
         tramos = [{"de": nom.get(a, a), "a": nom.get(b, b), "min": round(m, 1)}
                   for (a, b), m in sorted(ap.items(), key=lambda kv: kv[0])]
-        return {"tramos": len(ap), "sesgos_n": len(se), "sesgos": sesgos, "tramos_lista": tramos[:80]}
+        sal = sorted(self.salidas.items(), key=lambda kv: -kv[1])
+        return {"guardado": self.almacen.estado(),
+                "tramos": len(ap), "sesgos_n": len(se), "sesgos": sesgos, "tramos_lista": tramos[:80],
+                "salidas_n": len(sal), "salidas": [{"num": n, "min": m} for n, m in sal[:12]]}
 
     def geocode(self, q):
         with self.lock:
@@ -188,6 +202,10 @@ class App:
             return {"ok": False, "error": "No pude calcular la ruta (%s)." % e}
 
     def bucle(self):
+        # antes de nada, recuperar lo aprendido (el disco de Render llega vacío tras cada reinicio)
+        if self.almacen.activo:
+            self.almacen.cargar()
+            threading.Thread(target=ciclo_guardado, args=(self.almacen,), daemon=True).start()
         while True:
             try:
                 self.ciclo()

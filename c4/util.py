@@ -42,6 +42,7 @@ CONFIG_DEFECTO = {
     "recuperacion": 0.0,                # fracción de marcha recuperable si va con retraso
     "usar_tiempos_aprendidos": True,
     "usar_correccion_sesgo": True,      # aprende de los fallos: corrige sesgos por estación
+    "usar_retraso_tipico": True,        # los trenes que aún no han salido llevan su retraso habitual
     "sesgo_damp": 0.5,                  # cuánto se aplica del sesgo aprendido (0-1)
     "sesgo_cap": 1.0,                   # tope de la corrección por estación (min)
     "guardar_historial": True,

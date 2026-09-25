@@ -222,7 +222,7 @@ function pintarViaje() {
     return `<div class="tv${destacado ? " primero" : ""}${perdido ? " perdido" : ""}" data-tren="${t.id}" data-jo="${jo}" data-jd="${jd}">
       <div class="tv-cab">
         <div>
-          <div class="tv-tren"><span class="bola" style="background:${colorDir(t.dir)}"></span>→ ${esc(destinoCorto(t))}${t.con_datos ? tagRetraso(t.retraso) : `<span class="tag gris">${t.situacion.startsWith("Aún") ? "Programado" : "Sin datos"}</span>`}${numT(t.num)}</div>
+          <div class="tv-tren"><span class="bola" style="background:${colorDir(t.dir)}"></span>→ ${esc(destinoCorto(t))}${t.con_datos ? tagRetraso(t.retraso) : t.tipico >= 1 ? `<span class="tag warn" title="Retraso habitual de este tren, aprendido de días anteriores">suele +${Math.round(t.tipico)}</span>` : `<span class="tag gris">${t.situacion.startsWith("Aún") ? "Programado" : "Sin datos"}</span>`}${numT(t.num)}</div>
           <div class="tv-sit">${esc(t.situacion)}${t.via ? ` · vía ${esc(t.via)}` : ""}${fia ? ` · <span class="fia ${fia[0]}">${fia[1]}</span>` : ""}</div>
         </div>
         <div class="tv-grande"><div class="h num">${hm(lle)}</div><div class="l">llegada · ${cuando}</div></div>
@@ -892,9 +892,22 @@ function tarjetaAprendizaje() {
   const ns = APREN.sesgos_n || 0;
   let s = `<div class="card apr-card"><div class="card-cab"><h3>🧠 Aprende de sus errores</h3></div>
     <p class="sub" style="margin:0 0 10px">El programa se corrige solo: guarda cada predicción, la compara con lo que pasó de verdad y ajusta lo que falla. Cuanto más se usa, más afina.</p>
-    <div class="kpis">${kpi(APREN.tramos || 0, "tramos con tiempo real aprendido")}${kpi(ns, "estaciones con sesgo corregido")}</div>`;
+    <div class="kpis">${kpi(APREN.tramos || 0, "tramos con tiempo real aprendido")}${kpi(APREN.salidas_n || 0, "trenes con su retraso habitual aprendido")}${kpi(ns, "estaciones con sesgo corregido")}</div>`;
+  const g = APREN.guardado || {};
+  s += g.activo
+    ? `<p class="apr-guardado ok">☁️ Guardado en GitHub${g.ultimo_guardado ? ` · último guardado ${esc(g.ultimo_guardado)}` : ""}. Aunque el servidor se reinicie, no se pierde nada.</p>`
+    : `<p class="apr-guardado warn">⚠ El aprendizaje solo está en el servidor: si Render lo reinicia (cada noche) se pierde. Configura el guardado en GitHub (C4_GH_TOKEN y C4_GH_REPO) para conservarlo.</p>`;
+  if (g.error) s += `<p class="apr-guardado warn">⚠ ${esc(g.error)}</p>`;
+  if (APREN.salidas && APREN.salidas.length)
+    s += `<h4 class="apr-sub">Trenes que suelen salir con retraso</h4><div class="apr-lista">` + APREN.salidas.slice(0, 8).map((x) =>
+      {
+        const t = R && R.trenes.find((y) => y.num === x.num);
+        const nom = t ? `El de las ${hm(t.prog_d[0])} · ${esc(nombreCorto(t.origen))} → ${esc(destinoCorto(t))}` : "Un tren que hoy no circula";
+        return `<div class="apr-fila"><span>${nom} ${numT(x.num)}</span><b class="num mas">+${x.min} min</b></div>`;
+      }).join("") +
+      `</div><p class="sub" style="margin-top:6px">Mientras no han salido, esos trenes ya se calculan con su retraso habitual (y sus cruces), en vez de suponerlos puntuales.</p>`;
   if (APREN.sesgos && APREN.sesgos.length)
-    s += `<div class="apr-lista">` + APREN.sesgos.slice(0, 8).map((x) =>
+    s += `<h4 class="apr-sub">Estaciones donde se corrige la hora estimada</h4><div class="apr-lista">` + APREN.sesgos.slice(0, 8).map((x) =>
       `<div class="apr-fila"><span>${esc(x.estacion)}</span><b class="num ${x.min > 0 ? "mas" : "menos"}">${x.min > 0 ? "+" : ""}${x.min} min</b></div>`).join("") +
       `</div><p class="sub" style="margin-top:6px">«+» = ahí los trenes suelen llegar algo más tarde de lo previsto; ya está corregido y acotado para no pasarse.</p>`;
   return s + `</div>`;
@@ -1033,8 +1046,8 @@ function pintarInicio() {
         <div class="hk"><div class="hk-n num">${R.con_posicion || 0}</div><div class="hk-l">localizados en vivo</div></div>
         <div class="hk"><div class="hk-n num">${prox ? hm(prox.hora) : "—"}</div><div class="hk-l">${prox ? "próx. cruce · " + esc(nombreCorto(prox.estacion)) : "sin cruces próximos"}</div></div>
       </div></div>`;
-  if ((R.tramos_aprendidos || 0) + (R.sesgos_corregidos || 0) > 0)
-    h += `<div class="apr-strip" onclick="irA('precision')">🧠 <span>Aprendiendo de los datos: <b>${R.tramos_aprendidos || 0}</b> tramos y <b>${R.sesgos_corregidos || 0}</b> estaciones ajustadas a partir de errores</span><span class="cta-fl">›</span></div>`;
+  if ((R.tramos_aprendidos || 0) + (R.sesgos_corregidos || 0) + (R.salidas_aprendidas || 0) > 0)
+    h += `<div class="apr-strip" onclick="irA('precision')">🧠 <span>Aprendido: <b>${R.tramos_aprendidos || 0}</b> tramos, <b>${R.salidas_aprendidas || 0}</b> trenes con su retraso habitual y <b>${R.sesgos_corregidos || 0}</b> estaciones corregidas</span><span class="cta-fl">›</span></div>`;
   h += `<button class="cta-ir" onclick="irA('ir')">
       <div class="cta-ic">🧭</div>
       <div class="cta-tx"><div class="cta-t">¿A dónde vas?</div><div class="cta-s">Ruta puerta a puerta: bus urbano + tren, con la hora real de llegada</div></div>

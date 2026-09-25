@@ -42,14 +42,17 @@
   <section id="tab-vivo">
     <div class="panel panel-mapa">
       <div class="mapa-barra">
-        <select id="mapa-linea" aria-label="Filtrar por línea"></select>
-        <button class="btn-ico" id="seguir" title="Centrar en mi ubicación">📍</button>
-        <span class="vivo-cont" id="vivo-cont"></span>
+        <div class="chips-lineas" id="chips-lineas" role="toolbar" aria-label="Filtrar por línea"></div>
+        <button class="btn-ico" id="seguir" title="Centrar en mi ubicación" aria-label="Centrar en mi ubicación">📍</button>
       </div>
-      <div id="mapa"></div>
+      <select id="mapa-linea" hidden aria-hidden="true"></select>
+      <div class="mapa-caja">
+        <div id="mapa"></div>
+        <div class="vivo-pill" id="vivo-cont"></div>
+      </div>
       <div class="leyenda">
-        <span><span class="lg-bus"></span>Autobús en circulación (la flecha marca el sentido)</span>
-        <span><span class="lg-parada"></span>Parada</span>
+        <span><span class="lg-bus"></span>Autobús, con el color de su línea (la flecha marca el sentido)</span>
+        <span><span class="lg-parada"></span>Parada (aparecen al acercar el mapa)</span>
         <span class="sub" id="mapa-pie"></span>
       </div>
     </div>

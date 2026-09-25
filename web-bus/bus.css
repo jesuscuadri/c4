@@ -126,3 +126,36 @@ select{margin-bottom:12px}
   #mapa{height:calc(100dvh - 300px);min-height:340px}
   .vivo-cont{font-size:12px}
 }
+
+/* ======================= Mapa en vivo, versión limpia ======================= */
+.mapa-barra{gap:10px;align-items:center}
+.chips-lineas{flex:1;min-width:0;display:flex;gap:6px;overflow-x:auto;scrollbar-width:thin;padding:2px 2px 6px;scrollbar-color:var(--bd2) transparent}
+.chip-l{flex:0 0 auto;display:inline-flex;align-items:center;gap:5px;border:0;border-radius:9px;padding:6px 9px;background:var(--c,var(--panel2));color:#fff;font-weight:800;font-size:13px;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,.25);transition:opacity .15s,transform .1s}
+.chip-l:hover{transform:translateY(-1px)}
+.chip-l i{font-style:normal;font-weight:700;font-size:11px;background:rgba(0,0,0,.28);border-radius:6px;padding:0 5px;min-width:16px;text-align:center}
+.chip-l.todas{background:var(--panel2);color:var(--tx);border:1px solid var(--bd2)}
+.chip-l.todas i{background:var(--bd)}
+.chip-l.todas.on{background:var(--tx);color:var(--panel);border-color:var(--tx)}
+.chip-l.todas.on i{background:rgba(127,127,127,.35)}
+.chip-l.vacia{opacity:.4}
+.chip-l.apagada{opacity:.3}
+.chip-l.on:not(.todas){box-shadow:0 0 0 2px var(--panel),0 0 0 4px var(--c)}
+.mapa-caja{position:relative}
+#mapa{height:calc(100vh - 290px);min-height:460px}
+.vivo-pill{position:absolute;left:12px;top:12px;z-index:800;background:var(--panel);color:var(--tx2);border-radius:10px;padding:7px 11px;font-size:13px;box-shadow:0 1px 6px rgba(0,0,0,.35);display:flex;align-items:center;gap:6px}
+.vivo-pill b{color:var(--tx)}
+.vivo-pill:empty{display:none}
+.vp-x{border:0;background:var(--panel2);color:var(--tx);border-radius:7px;width:22px;height:22px;cursor:pointer;font-size:15px;line-height:1;margin-left:2px}
+/* buses con el mapa alejado: solo un punto de su color con una flecha pequeña */
+.lejos .bm-l{min-width:13px;width:13px;height:13px;padding:0;font-size:0;box-shadow:0 0 0 1.5px var(--panel),0 1px 3px rgba(0,0,0,.5)}
+.lejos .bm-fl{border-left-width:3.5px;border-right-width:3.5px;border-bottom-width:6px;transform-origin:50% 50%}
+.lejos .bm-fl{margin-top:5px}
+.lg-bus{background:linear-gradient(135deg,#169CD8 50%,#FBBA13 50%)}
+.lg-parada{background:#fff;border:1.5px solid #6b6b75;width:9px;height:9px}
+.leaflet-control-attribution{font-size:10px!important}
+.bus-tt{font-size:12px}
+@media (max-width:760px){
+  #mapa{height:calc(100dvh - 285px);min-height:360px}
+  .chip-l{padding:6px 8px;font-size:12.5px}
+}
+.bm.sin-rumbo .bm-fl{display:none}

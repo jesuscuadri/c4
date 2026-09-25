@@ -8,11 +8,12 @@ MOTIVO_MIN = 0.5  # por debajo de esto no merece la pena explicar la espera
 
 
 class Estimador:
-    def __init__(self, linea, cfg, aprendidos=None, sesgos=None):
+    def __init__(self, linea, cfg, aprendidos=None, sesgos=None, salidas=None):
         self.L = linea
         self.cfg = cfg
         self.aprendidos = aprendidos or {}
         self.sesgos = sesgos or {}                 # {stop_id: min} corrección aprendida de errores
+        self.salidas = salidas or {}               # {num: min} retraso típico con el que sale cada servicio
         self.sesgo_damp = cfg.get("sesgo_damp", 0.5)
         self.sesgo_cap = cfg.get("sesgo_cap", 1.0)
         self.cruces_activos = []
@@ -79,15 +80,21 @@ class Estimador:
             if j == 0:
                 e["parado"] = True
             return e
+        # Sin ningún dato en directo. Si este servicio suele salir tarde (aprendido de días
+        # anteriores), se cuenta con ese retraso en vez de suponerlo puntual.
         r = e["retraso"]
-        if v.sd[0] + r > ahora - 1:
-            e.update(situacion="Aún no ha salido")
+        tip = self.salidas.get(v.num, 0.0) if self.cfg.get("usar_retraso_tipico", True) else 0.0
+        if tip:
+            e["tipico"] = tip
+        if v.sd[0] + r + tip > ahora - 1:
+            e.update(situacion="Aún no ha salido" + (" · suele salir con +%d min" % round(tip) if tip >= 1 else ""))
             return e
-        if v.sa[-1] + r < ahora - 2:
+        if v.sa[-1] + r + tip < ahora - 2:
             e.update(fin=True, j0=n - 1, situacion="Terminado")
             return e
-        j = next((j for j in range(n) if v.sa[j] + r >= ahora), n - 1)
-        e.update(j0=j, llegada0=max(ahora, v.sa[j] + r), situacion="Sin datos en tiempo real: se supone en hora")
+        j = next((j for j in range(n) if v.sa[j] + r + tip >= ahora), n - 1)
+        e.update(j0=j, llegada0=max(ahora, v.sa[j] + r + tip),
+                 situacion="Sin datos en tiempo real: se supone " + ("con su retraso habitual (+%d min)" % round(tip) if tip >= 1 else "en hora"))
         return e
 
     def _rotaciones_por_via(self, rt):
@@ -163,6 +170,8 @@ class Estimador:
                         base = max(base, ahora + (0.1 if e["parado"] else 0.0))
                         if j == 0 and e["retraso"] and e["con_datos"]:
                             base = max(base, v.sd[0] + e["retraso"])
+                        elif j == 0 and e.get("tipico"):
+                            base = max(base, v.sd[0] + e["tipico"])
                     d, motivo = base, None
                     for tipo, otro, oj, margen, info, tope in deps.get((v.id, j), ()):
                         val = A[otro.id][oj]
@@ -289,6 +298,7 @@ class Estimador:
                 "situacion": e["situacion"], "fin": e["fin"], "cancelado": e["cancelado"],
                 "j0": j0, "parado": e["parado"], "con_datos": e["con_datos"], "fuente": e["fuente"],
                 "retraso": round(r, 1),
+                "tipico": round(e.get("tipico", 0.0), 1),
                 "k": v.k, "para": v.para,
                 "prog_a": [round(x, 2) for x in v.sa], "prog_d": [round(x, 2) for x in v.sd],
                 "est_a": [None if x is None else round(x, 3) for x in A[v.id]],

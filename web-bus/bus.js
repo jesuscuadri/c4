@@ -54,7 +54,7 @@ function bearing(a, b) {
 function iconoBus(v, hdg) {
   return L.divIcon({
     className: "bus-marca", iconSize: [28, 28], iconAnchor: [14, 14],
-    html: `<div class="bm"><span class="bm-fl" style="border-bottom-color:${esc(v.color)};transform:translate(-50%,-50%) rotate(${hdg}deg) translateY(-16px)"></span>
+    html: `<div class="bm sin-rumbo"><span class="bm-fl" style="border-bottom-color:${esc(v.color)};transform:translate(-50%,-50%) rotate(${hdg}deg) translateY(-16px)"></span>
       <span class="bm-l" style="background:${esc(v.color)}">${esc(v.linea)}</span></div>`,
   });
 }
@@ -66,6 +66,10 @@ async function tickBuses() {
   if (!j || !j.vehiculos) { estadoChip(false); return; }
   const vis = j.vehiculos.filter((v) => !filtroLinea || v.linea === filtroLinea);
   ultBuses = j.vehiculos.length;
+  const cuenta = {};
+  for (const v of j.vehiculos) cuenta[v.linea] = (cuenta[v.linea] || 0) + 1;
+  tickBuses._cuenta = cuenta;
+  pintarChipsLineas(cuenta);
   const vivos = new Set();
   for (const v of vis) {
     const key = v.linea + "-" + v.bus, pos = [v.lat, v.lon];
@@ -77,18 +81,21 @@ async function tickBuses() {
       b = busMarks[key] = { m, lat: v.lat, lon: v.lon, hdg: 0, v };
     } else {
       const movido = Math.abs(v.lat - b.lat) + Math.abs(v.lon - b.lon);
-      if (movido > 1e-5) b.hdg = bearing([b.lat, b.lon], pos);
+      if (movido > 1e-5) { b.hdg = bearing([b.lat, b.lon], pos); b.rumbo = true; }
       b.lat = v.lat; b.lon = v.lon; b.v = v;
       b.m.setLatLng(pos);
       const fl = b.m._icon && b.m._icon.querySelector(".bm-fl");
       if (fl) fl.style.transform = `translate(-50%,-50%) rotate(${b.hdg}deg) translateY(-16px)`;
+      if (b.rumbo && b.m._icon) b.m._icon.querySelector(".bm").classList.remove("sin-rumbo");
       if (b.m._popup && b.m._popup.isOpen()) b.m.setPopupContent(htmlPopupBus(v));
     }
   }
   for (const key in busMarks) if (!vivos.has(key)) { capaBuses.removeLayer(busMarks[key].m); delete busMarks[key]; }
   estadoChip(true);
   const n = vis.length;
-  $("vivo-cont").innerHTML = `<b>${n}</b> ${filtroLinea ? "de la línea " + esc(filtroLinea) : "autobuses"} en circulación`;
+  $("vivo-cont").innerHTML = filtroLinea
+    ? `<b>${n}</b> ${n === 1 ? "bus" : "buses"} de la línea <b>${esc(filtroLinea)}</b> <button class="vp-x" data-fl="" title="Ver todas">×</button>`
+    : `<b>${n}</b> buses en circulación`;
   $("mapa-pie").textContent = `Actualizado ${new Date((j.ts || Date.now() / 1000) * 1000).toLocaleTimeString("es-ES")} · se refresca solo cada pocos segundos`;
 }
 function htmlPopupBus(v) {
@@ -225,43 +232,103 @@ function abrirLinea(codigo) {
 }
 
 /* ---------------- mapa ---------------- */
+const OSCURO = () => matchMedia("(prefers-color-scheme: dark)").matches;
+const ZOOM_DETALLE = 14.5;   // desde aquí los buses llevan número y se ven las paradas
+function estiloParada(enLinea, color) {
+  const osc = OSCURO();
+  return enLinea
+    ? { radius: 5, color, weight: 2.5, fillColor: osc ? "#1a1a1f" : "#fff", fillOpacity: 1, opacity: 1 }
+    : { radius: 3.5, color: osc ? "#8a8a94" : "#6b6b75", weight: 1.3, fillColor: osc ? "#e4e4e8" : "#fff", fillOpacity: 1, opacity: 1 };
+}
 function iniciarMapa() {
   if (mapa || !window.L) return;
-  mapa = L.map("mapa", { zoomControl: true, zoomSnap: 0.25 }).setView([43.5357, -5.6615], 13);
-  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, className: "base-osm",
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' }).addTo(mapa);
+  mapa = L.map("mapa", { zoomControl: false, zoomSnap: 0.25 }).setView([43.5345, -5.6620], window.innerWidth < 600 ? 12.75 : 13.5);
+  L.control.zoom({ position: "bottomright" }).addTo(mapa);
+  mapa.attributionControl.setPrefix(false);
+  // fondo limpio (lienzo gris de Esri, claro u oscuro), como en el mapa del tren
+  const esri = (srv) => `https://server.arcgisonline.com/ArcGIS/rest/services/${srv}/MapServer/tile/{z}/{y}/{x}`;
+  const tono = OSCURO() ? "Dark" : "Light";
+  const sencillo = L.layerGroup([
+    L.tileLayer(esri(`Canvas/World_${tono}_Gray_Base`), { maxZoom: 19, maxNativeZoom: 16, attribution: "Mapa &copy; Esri, HERE, Garmin, &copy; OpenStreetMap" }),
+    L.tileLayer(esri(`Canvas/World_${tono}_Gray_Reference`), { maxZoom: 19, maxNativeZoom: 16, zIndex: 3 }),
+  ]);
+  const planos = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, className: "base-osm",
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' });
+  const satelite = L.tileLayer(esri("World_Imagery"), { maxZoom: 19, attribution: "Imágenes &copy; Esri" });
+  const fondos = { "Sencillo": sencillo, "Detallado": planos, "Satélite": satelite };
+  (fondos[leer("fondo", "Sencillo")] || sencillo).addTo(mapa);
+  L.control.layers(fondos, null, { position: "topright" }).addTo(mapa);
+  mapa.on("baselayerchange", (e) => guardar("fondo", e.name));
   capaRuta = L.layerGroup().addTo(mapa);
-  capaParadas = L.layerGroup().addTo(mapa);
-  capaBuses = L.layerGroup().addTo(mapa);
+  // 565 paradas: en lienzo (canvas), mucho más ligero que un elemento por parada
+  const lienzo = L.canvas({ padding: 0.3 });
+  capaParadas = L.layerGroup();
   for (const p of RED.paradas)
-    L.marker([p.lat, p.lon], { _pid: p.id, icon: L.divIcon({ className: "", html: `<div class="parada-punto"></div>`, iconSize: [10, 10] }) })
-      .bindTooltip(p.nombre, { className: "bus-tt" }).on("click", () => abrirParada(p.id)).addTo(capaParadas);
+    L.circleMarker([p.lat, p.lon], { renderer: lienzo, _pid: p.id, ...estiloParada(false) })
+      .bindTooltip(p.nombre, { className: "bus-tt", direction: "top", offset: [0, -5] })
+      .on("click", () => abrirParada(p.id)).addTo(capaParadas);
+  capaBuses = L.layerGroup().addTo(mapa);
   const cont = mapa.getContainer();
   mapa.on("zoomstart movestart", () => cont.classList.add("sin-anim"));
   mapa.on("zoomend moveend", () => setTimeout(() => cont.classList.remove("sin-anim"), 60));
+  mapa.on("zoomend", ajustarDetalle);
   $("mapa-linea").innerHTML = `<option value="">Todas las líneas</option>` +
     RED.lineas.map((l) => `<option value="${esc(l.codigo)}">Línea ${esc(l.codigo)} · ${esc(l.nombre).slice(0, 28)}</option>`).join("");
+  pintarChipsLineas({});
+  ajustarDetalle();
   arrancarBuses();
+}
+/* Con el mapa alejado: buses como puntos de color y sin paradas. Al acercar: número, flecha y paradas. */
+function ajustarDetalle() {
+  if (!mapa) return;
+  const cerca = mapa.getZoom() >= ZOOM_DETALLE;
+  mapa.getContainer().classList.toggle("lejos", !cerca && !filtroLinea);
+  const ver = cerca || !!filtroLinea;
+  if (ver && !mapa.hasLayer(capaParadas)) capaParadas.addTo(mapa);
+  if (!ver && mapa.hasLayer(capaParadas)) mapa.removeLayer(capaParadas);
+}
+/* Barra de líneas: el color de cada una y cuántos buses lleva ahora mismo. Un toque filtra. */
+function pintarChipsLineas(cuenta) {
+  const cont = $("chips-lineas");
+  if (!cont || !RED) return;
+  const total = Object.values(cuenta).reduce((a, b) => a + b, 0);
+  const lineas = [...RED.lineas].sort((a, b) => (cuenta[b.codigo] ? 1 : 0) - (cuenta[a.codigo] ? 1 : 0) || a.id - b.id);
+  const html = `<button class="chip-l todas${filtroLinea ? "" : " on"}" data-fl="">Todas${total ? `<i>${total}</i>` : ""}</button>` +
+    lineas.map((l) => {
+      const n = cuenta[l.codigo] || 0;
+      return `<button class="chip-l${filtroLinea === l.codigo ? " on" : ""}${filtroLinea && filtroLinea !== l.codigo ? " apagada" : ""}${n ? "" : " vacia"}" data-fl="${esc(l.codigo)}" style="--c:${colorHex(l.color)}" title="${esc(l.nombre)}${n ? ` · ${n} en circulación` : " · ahora sin buses"}"><b>${esc(l.codigo)}</b>${n ? `<i>${n}</i>` : ""}</button>`;
+    }).join("");
+  if (cont._html !== html) { cont.innerHTML = html; cont._html = html; }
 }
 function trazaTrayecto(t) { return t.paradas.map((pid) => PARADAS[pid]).filter(Boolean).map((p) => [p.lat, p.lon]); }
 function setFiltroLinea(codigo) {
   filtroLinea = codigo;
+  $("mapa-linea").value = codigo;
   capaRuta.clearLayers();
-  if (!codigo) {
-    capaParadas.eachLayer((m) => m.setOpacity(1));
-    tickBuses();
-    return;
-  }
-  const l = LINEAS[codigo]; if (!l) return;
-  const trs = Object.values(TRAYECTOS).filter((t) => t.linea === l.id);
+  const l = codigo && LINEAS[codigo];
   const usadas = new Set(); let pts = [];
-  for (const t of trs) {
-    const traza = trazaTrayecto(t);
-    if (traza.length > 1) { L.polyline(traza, { color: colorHex(l.color), weight: 5, opacity: .85 }).addTo(capaRuta); pts = pts.concat(traza); }
-    t.paradas.forEach((pid) => usadas.add(pid));
+  if (l) {
+    const col = colorHex(l.color), osc = OSCURO();
+    for (const t of Object.values(TRAYECTOS).filter((x) => x.linea === l.id)) {
+      const traza = trazaTrayecto(t);
+      if (traza.length > 1) {
+        L.polyline(traza, { color: osc ? "#0b0b0e" : "#fff", weight: 9, opacity: .8, interactive: false, lineJoin: "round", lineCap: "round" }).addTo(capaRuta);
+        L.polyline(traza, { color: col, weight: 5, opacity: 1, interactive: false, lineJoin: "round", lineCap: "round" }).addTo(capaRuta);
+        pts = pts.concat(traza);
+      }
+      t.paradas.forEach((pid) => usadas.add(pid));
+    }
+    capaParadas.eachLayer((m) => {
+      const en = usadas.has(m.options._pid);
+      m.setStyle(en ? estiloParada(true, col) : { opacity: 0, fillOpacity: 0 });
+      if (en) m.bringToFront();
+    });
+    if (pts.length) mapa.fitBounds(L.latLngBounds(pts), { padding: [30, 30] });
+  } else {
+    capaParadas.eachLayer((m) => m.setStyle(estiloParada(false)));
   }
-  capaParadas.eachLayer((m) => m.setOpacity(usadas.has(m.options._pid) ? 1 : .2));
-  if (pts.length) mapa.fitBounds(L.latLngBounds(pts), { padding: [30, 30] });
+  ajustarDetalle();
+  pintarChipsLineas(tickBuses._cuenta || {});
   tickBuses();
 }
 function seguirme() {
@@ -320,6 +387,8 @@ function irA(t) {
 }
 
 document.addEventListener("click", (ev) => {
+  const fl = ev.target.closest("[data-fl]");
+  if (fl) { const c = fl.dataset.fl; setFiltroLinea(c === filtroLinea ? "" : c); return; }
   const vl = ev.target.closest("[data-verlinea]");
   if (vl) { $("mapa-linea").value = vl.dataset.verlinea; irA("vivo"); setFiltroLinea(vl.dataset.verlinea); return; }
   const par = ev.target.closest("[data-parada]");
