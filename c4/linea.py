@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Modelo estático de la línea: estaciones, trenes del día, cruces, seguimientos y rotaciones."""
+import math
 from collections import Counter
 
 from .util import distancia_km, normaliza
@@ -79,6 +80,37 @@ class Linea:
         for a, b in zip(self.coord, self.coord[1:]):
             self.km.append(self.km[-1] + distancia_km(a, b))
         self.trazado_km = list(self.km)
+
+    def proyectar(self, lat, lon, km_min=None, km_max=None):
+        """Km sobre la vía del punto (lat, lon) y su distancia a ella, buscando solo entre
+        km_min y km_max (la vía hace curvas: así no se confunde con otro tramo cercano)."""
+        if lat is None or lon is None or not self.trazado_km or len(self.trazado) < 2:
+            return None
+        try:
+            lat, lon = float(lat), float(lon)
+        except (TypeError, ValueError):
+            return None
+        pts, acum = self.trazado, self.trazado_km
+        km_min = -1e9 if km_min is None else km_min
+        km_max = 1e9 if km_max is None else km_max
+        coslat = math.cos(math.radians(lat))
+        mejor = None
+        for i in range(len(pts) - 1):
+            if acum[i + 1] < km_min or acum[i] > km_max:
+                continue
+            # plano local (km) centrado en el punto
+            ax, ay = (pts[i][1] - lon) * 111.32 * coslat, (pts[i][0] - lat) * 110.57
+            bx, by = (pts[i + 1][1] - lon) * 111.32 * coslat, (pts[i + 1][0] - lat) * 110.57
+            dx, dy = bx - ax, by - ay
+            ll = dx * dx + dy * dy
+            t = 0.0 if ll <= 0 else max(0.0, min(1.0, -(ax * dx + ay * dy) / ll))
+            px, py = ax + t * dx, ay + t * dy
+            d = math.hypot(px, py)
+            if mejor is None or d < mejor[1]:
+                mejor = (acum[i] + t * (acum[i + 1] - acum[i]), d)
+        if mejor is None:
+            return None
+        return (max(km_min, min(km_max, mejor[0])), mejor[1])
 
     def _construir(self, tid, filas):
         if len(filas) < 2:

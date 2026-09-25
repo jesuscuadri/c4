@@ -39,6 +39,9 @@ def guardar_observaciones(rt, linea):
 # cuánto retraso sale cada servicio. Esas cifras se guardan en «aprendizaje.json», que es pequeño y
 # se puede conservar fuera del servidor (ver persistencia.py), así el aprendizaje no se pierde nunca.
 RESUMEN = "aprendizaje.json"
+# Desde este día el modelo interpreta bien el «IN_TRANSIT_TO» de Renfe y usa el GPS: los
+# errores medidos antes eran de otro modelo y no sirven para corregir sesgos del actual.
+MODELO_DESDE = "20260926"
 
 
 def num_servicio(tid):
@@ -47,8 +50,9 @@ def num_servicio(tid):
     return dig[0] if dig else tid
 
 
-def resumir_dia(ruta):
-    """De un obs_AAAAMMDD.csv: ({"A|B": [min, ...]}, {num: retraso_al_salir})."""
+def resumir_dia(ruta, con_paradas=False):
+    """De un obs_AAAAMMDD.csv: ({"A|B": [min, ...]}, {num: retraso_al_salir}) y, si se pide,
+    también {stop: [minutos parado, ...]} (lo que dura de verdad cada parada)."""
     por_viaje = defaultdict(list)
     try:
         with open(ruta, encoding="utf-8") as f:
@@ -59,8 +63,8 @@ def resumir_dia(ruta):
                     ret = 0.0
                 por_viaje[r["trip"]].append((int(r["ts"]), r["stop"], r["estado"], ret))
     except Exception:  # noqa: BLE001
-        return {}, {}
-    tramos, salidas = defaultdict(list), {}
+        return ({}, {}, {}) if con_paradas else ({}, {})
+    tramos, salidas, paradas = defaultdict(list), {}, defaultdict(list)
     for tid, obs in por_viaje.items():
         obs = sorted(set(obs))
         salida, llegada = {}, {}
@@ -69,9 +73,14 @@ def resumir_dia(ruta):
                 salida.setdefault(s0, (t0 + t1) / 2)
             if e1 == "STOPPED_AT" and (s0 != s1 or e0 != "STOPPED_AT"):
                 llegada.setdefault(s1, (t0 + t1) / 2)
+        for st, t_ll in llegada.items():
+            if st in salida and 0 < salida[st] - t_ll < 600:
+                paradas[st].append(round((salida[st] - t_ll) / 60.0, 2))
+        # orden de paso por las estaciones; si Renfe hace «saltar» el tren a la estación anterior
+        # (pasa: Veriña ↔ Tremañes), cada estación cuenta solo la primera vez
         orden = []
         for _, st, _, _ in obs:
-            if not orden or orden[-1] != st:
+            if st not in orden:
                 orden.append(st)
         for a_, b_ in zip(orden, orden[1:]):
             if a_ in salida and b_ in llegada and llegada[b_] > salida[a_]:
@@ -81,6 +90,8 @@ def resumir_dia(ruta):
         movido = next((o for o in obs if o[1] != primera), None)
         if movido is not None:
             salidas[num_servicio(tid)] = round(movido[3], 1)
+    if con_paradas:
+        return dict(tramos), salidas, dict(paradas)
     return dict(tramos), salidas
 
 
@@ -89,9 +100,9 @@ def _leer_resumen():
     try:
         with open(ruta, encoding="utf-8") as f:
             j = json.load(f)
-        return {"tramos": j.get("tramos", {}), "salidas": j.get("salidas", {})}
+        return {"tramos": j.get("tramos", {}), "salidas": j.get("salidas", {}), "paradas": j.get("paradas", {})}
     except Exception:  # noqa: BLE001
-        return {"tramos": {}, "salidas": {}}
+        return {"tramos": {}, "salidas": {}, "paradas": {}}
 
 
 def resumen(dias=45):
@@ -101,10 +112,11 @@ def resumen(dias=45):
     if os.path.isdir(HIST):
         for fn in sorted(f for f in os.listdir(HIST) if f.startswith("obs_"))[-dias:]:
             fecha = fn[4:12]
-            tr, sa = resumir_dia(os.path.join(HIST, fn))
+            tr, sa, pa = resumir_dia(os.path.join(HIST, fn), con_paradas=True)
             if tr or sa:
                 res["tramos"][fecha], res["salidas"][fecha] = tr, sa
-    for clave in ("tramos", "salidas"):
+                res["paradas"][fecha] = pa
+    for clave in ("tramos", "salidas", "paradas"):
         res[clave] = {f: v for f, v in sorted(res[clave].items())[-dias:]}
     return res
 
@@ -130,6 +142,25 @@ def aprender_tiempos(dias=30, res=None):
     return {k: statistics.median(v) for k, v in muestras.items() if len(v) >= 5}
 
 
+def aprender_paradas(dias=30, minimo=5, res=None):
+    """Cuánto dura como mínimo cada parada (cuartil bajo, en minutos): {stop: min}.
+    El horario suele poner llegada = salida; la realidad son 20-60 s que hay que sumar
+    cuando se usan tiempos de marcha aprendidos (que no incluyen la parada)."""
+    res = res or resumen()
+    muestras = defaultdict(list)
+    for fecha, pa in sorted((res.get("paradas") or {}).items())[-dias:]:
+        for stop, vals in pa.items():
+            muestras[stop].extend(x for x in vals if 0 < x <= 5)
+    out = {}
+    for k, v in muestras.items():
+        if len(v) >= minimo:
+            # cuartil bajo, no la mediana: muchas paradas largas son el tren esperando a su
+            # hora de salida (va adelantado) o a un cruce; lo que interesa es lo mínimo que tarda
+            v = sorted(v)
+            out[k] = round(v[int(0.25 * (len(v) - 1))], 2)
+    return out
+
+
 def aprender_salidas(dias=21, minimo=4, res=None):
     """Retraso típico con el que sale cada servicio (número de tren), si se repite: {num: minutos}.
     Solo se guardan los servicios que suelen salir con al menos 1 minuto de retraso."""
@@ -148,7 +179,7 @@ def aprender_salidas(dias=21, minimo=4, res=None):
     return out
 
 
-def aprender_sesgos(dias=14, minimo=6, cap=2.0):
+def aprender_sesgos(dias=14, minimo=6, cap=2.0, desde=None):
     """Aprende de los fallos. Lee el historial de precisión (lo que el programa dijo que
     llegaría un tren frente a lo que llegó de verdad) y calcula, por estación, el sesgo
     sistemático: si en una estación siempre nos quedamos cortos o largos, se guarda esa
@@ -158,8 +189,9 @@ def aprender_sesgos(dias=14, minimo=6, cap=2.0):
     llegar MÁS TARDE de lo que estimábamos (hay que sumar tiempo) y uno negativo, antes."""
     if not os.path.isdir(HIST):
         return {}
+    desde = MODELO_DESDE if desde is None else desde
     err = defaultdict(list)
-    ficheros = sorted(f for f in os.listdir(HIST) if f.startswith("precision_"))[-dias:]
+    ficheros = sorted(f for f in os.listdir(HIST) if f.startswith("precision_") and f[10:18] >= desde)[-dias:]
     for fn in ficheros:
         try:
             with open(os.path.join(HIST, fn), encoding="utf-8") as f:

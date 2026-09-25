@@ -191,16 +191,17 @@ def empaquetar():
             except Exception:  # noqa: BLE001
                 continue
     return {"version": 1, "generado": datetime.now().isoformat(timespec="seconds"),
-            "tramos": res["tramos"], "salidas": res["salidas"], "precision": precision}
+            "tramos": res["tramos"], "salidas": res["salidas"], "paradas": res.get("paradas", {}),
+            "precision": precision}
 
 
 def materializar(paquete):
     """Escribe en el disco local lo recuperado, sin pisar lo que ya haya de hoy."""
     os.makedirs(historial.HIST, exist_ok=True)
     local = historial._leer_resumen()
-    for clave in ("tramos", "salidas"):
+    for clave in ("tramos", "salidas", "paradas"):
         for fecha, valor in (paquete.get(clave) or {}).items():
-            local[clave].setdefault(fecha, valor)
+            local.setdefault(clave, {}).setdefault(fecha, valor)
     historial.guardar_resumen(local)
     for fecha, filas in (paquete.get("precision") or {}).items():
         ruta = os.path.join(historial.HIST, "precision_%s.csv" % fecha)

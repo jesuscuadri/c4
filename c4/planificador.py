@@ -72,9 +72,10 @@ def geocodificar(texto, linea, bus, con_internet=True):
     if n in LUGARES:
         lat, lon, nom = LUGARES[n]
         return {"lat": lat, "lon": lon, "nombre": nom, "tipo": "lugar"}
-    for clave, (lat, lon, nom) in LUGARES.items():
-        if clave in n or n in clave:
-            return {"lat": lat, "lon": lon, "nombre": nom, "tipo": "lugar"}
+    clave = _lugar_en(n)
+    if clave:
+        lat, lon, nom = LUGARES[clave]
+        return {"lat": lat, "lon": lon, "nombre": nom, "tipo": "lugar"}
 
     # 2) estación de tren de la C-4
     if linea is not None:
@@ -99,6 +100,51 @@ def geocodificar(texto, linea, bus, con_internet=True):
         if p:
             return p
     return None
+
+
+def _lugar_en(n):
+    """Sitio conocido cuyo nombre aparece como palabras completas en el texto (el más largo gana).
+    Así «la universidad laboral» es la Laboral (no el campus por contener «uni») y «Pepito»
+    no es la EPI."""
+    palabras = " %s " % n
+    mejor = None
+    for clave in LUGARES:
+        if " %s " % clave in palabras and (mejor is None or len(clave) > len(mejor)):
+            mejor = clave
+    return mejor
+
+
+def sugerir(texto, linea, bus, limite=8):
+    """Sugerencias mientras se escribe: sitios conocidos, estaciones de la C-4 y paradas de bus."""
+    n = normaliza(texto or "")
+    if len(n) < 2:
+        return []
+    out, vistos = [], set()
+
+    def poner(nombre, tipo, lat, lon, texto_busqueda):
+        if nombre in vistos:
+            return
+        vistos.add(nombre)
+        out.append({"nombre": nombre, "tipo": tipo, "lat": lat, "lon": lon, "texto": texto_busqueda})
+
+    for clave, (lat, lon, nom) in sorted(LUGARES.items(), key=lambda kv: (not kv[0].startswith(n), len(kv[0]))):
+        if clave.startswith(n) or (" " + n) in (" " + clave):
+            poner(nom, "lugar", lat, lon, nom)
+    if linea is not None:
+        ests = []
+        for k, nom in enumerate(linea.nombre):
+            nn = normaliza(nom)
+            if nn.startswith(n) or (" " + n) in (" " + nn) or ("-" + n) in nn:
+                ests.append((not nn.startswith(n), len(nn), k))
+        for _, _, k in sorted(ests):
+            poner(linea.nombre[k] + " (estación)", "estacion", linea.coord[k][0], linea.coord[k][1], linea.nombre[k])
+    if bus is not None and getattr(bus, "red_ok", False):
+        for p in bus.buscar_paradas(texto, limite=30):
+            pn = " " + normaliza(p["nombre"]).replace("(", " ")
+            if (" " + n) not in pn:
+                continue                    # solo si alguna palabra empieza así («can» no es «Vaticano»)
+            poner(p["nombre"] + " (parada de bus)", "parada", p["lat"], p["lon"], p["nombre"])
+    return out[:limite]
 
 
 def _nominatim(texto):
@@ -233,7 +279,11 @@ def _acceso(bus, origen, est_pt, en_vivo):
         sale_en = None
         if en_vivo:
             sale_en = bus.proximos_por_linea(tr["subir"]).get(tr["codigo"])
-        espera = sale_en if sale_en is not None else (ESPERA_BUS_DEF if i == 0 else ESPERA_TRANSBORDO_DEF)
+        if sale_en is not None and sale_en < t - 0.5:
+            # ese autobús pasa antes de que llegues a la parada: toca esperar al siguiente
+            sale_en = None
+        defecto = ESPERA_BUS_DEF if i == 0 else ESPERA_TRANSBORDO_DEF
+        espera = max(0.0, sale_en - t) if sale_en is not None else defecto
         t += espera
         ride_i = tr["hops"] * MIN_POR_PARADA
         t += ride_i
@@ -267,6 +317,9 @@ def planificar(linea, res, bus, origen, destino, ahora, en_vivo=True):
     ka, da = _estacion_mas_cerca(linea, destino["lat"], destino["lon"])
     dist_od = distancia_km((origen["lat"], origen["lon"]), (destino["lat"], destino["lon"])) * 1000
 
+    if dist_od < 120:
+        plan["error"] = "El origen y el destino son el mismo sitio."
+        return plan
     usar_tren = kb != ka and dist_od > 1500
     if not usar_tren:
         # todo dentro de la misma zona: bus/andar directo, sin tren
@@ -291,6 +344,11 @@ def planificar(linea, res, bus, origen, destino, ahora, en_vivo=True):
     tren = fila["tren"]
     jo, jd = fila["jo"], fila["jd"]
     sale, llega = tren["est_d"][jo], tren["est_a"][jd]
+    # si al tren se llega andando, no hace falta salir ya: se puede salir justo a tiempo
+    solo_andando = all(e["tipo"] == "andar" for e in etapas_acc)
+    salir = ahora
+    if solo_andando:
+        salir = max(ahora, sale - t_acc - (MARGEN_ENLACE if etapas_acc else 1.0))
 
     etapa_tren = {
         "tipo": "tren", "num": tren["num"], "linea": "C-4",
@@ -298,7 +356,7 @@ def planificar(linea, res, bus, origen, destino, ahora, en_vivo=True):
         "sale": round(sale, 2), "llega": round(llega, 2),
         "sale_hm": hm(sale), "llega_hm": hm(llega),
         "retraso": tren["retraso"], "destino": tren["destino"], "via": tren.get("via"),
-        "espera_estacion": round(max(0.0, sale - (ahora + t_acc)), 1),
+        "espera_estacion": round(max(0.0, sale - (salir + t_acc)), 1),
         "motivos": [{"texto": m["texto"], "min": m["min"], "estacion": linea.nombre[m["k"]]}
                     for m in fila["motivos"]],
     }
@@ -309,11 +367,28 @@ def planificar(linea, res, bus, origen, destino, ahora, en_vivo=True):
 
     plan["etapas"] = etapas_acc + [etapa_tren] + etapas_sal
     plan["ok"] = True
-    plan["sale"] = round(ahora, 2)
+    plan["sale"] = round(salir, 2)
+    plan["sale_hm"] = hm(salir)
+    plan["sale_en"] = round(max(0.0, salir - ahora), 1)
     plan["sale_estacion"] = round(sale, 2)
     plan["llega"] = round(llega + t_sal, 2)
     plan["llega_hm"] = hm(llega + t_sal)
-    plan["duracion"] = round(llega + t_sal - ahora, 1)
+    plan["duracion"] = round(llega + t_sal - salir, 1)
+    # otras opciones: los trenes siguientes que también enlazan
+    alt = []
+    for f in filas:
+        tt = f["tren"]
+        s_ = tt["est_d"][f["jo"]]
+        if tt["id"] == tren["id"] or s_ is None or s_ < listo_en_estacion - 0.1:
+            continue
+        l_ = tt["est_a"][f["jd"]]
+        alt.append({"num": tt["num"], "destino": tt["destino"], "sale": round(s_, 2), "sale_hm": hm(s_),
+                    "llega": round(l_ + t_sal, 2), "llega_hm": hm(l_ + t_sal),
+                    "salir_hm": hm(s_ - t_acc - (MARGEN_ENLACE if etapas_acc else 1.0)) if solo_andando else None,
+                    "retraso": tt["retraso"], "con_datos": tt["con_datos"]})
+        if len(alt) == 2:
+            break
+    plan["alternativas"] = alt
     plan["estacion_sub"] = linea.nombre[kb]
     plan["estacion_baj"] = linea.nombre[ka]
     if da > ANDAR_DIRECTO_MAX and not (bus and bus.red_ok and bus.cercanas(destino["lat"], destino["lon"], 600)):

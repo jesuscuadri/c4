@@ -21,6 +21,8 @@ class TiempoReal:
         self.error = None
         self.primera = {}        # (trip, stop, estado) -> minuto en que se vio por primera vez
         self.ultimo_estado = {}  # trip -> (stop, estado)
+        self.ts_lectura = {}     # trip -> marca de tiempo de la última lectura
+        self.coord_vista = {}    # trip -> ((lat, lon), minuto en que apareció esa coordenada)
 
     # ------------------------------------------------------------------
     def consultar(self, filtro, rutas=(), paradas=()):
@@ -58,14 +60,30 @@ class TiempoReal:
             estado = vh.get("currentStatus", "IN_TRANSIT_TO")
             etiqueta = (vh.get("vehicle") or {}).get("label", "")
             via = etiqueta.split("PLATF.(")[1].rstrip(")") if "PLATF.(" in etiqueta else None
+            lat = (vh.get("position") or {}).get("latitude")
+            lon = (vh.get("position") or {}).get("longitude")
+            # Renfe renueva la marca de tiempo en cada lectura aunque la coordenada no haya
+            # cambiado: apuntamos desde cuándo es la coordenada para saber su antigüedad real.
+            desde = None
+            if lat is not None and lon is not None:
+                c = (round(float(lat), 5), round(float(lon), 5))
+                previo = self.coord_vista.get(tid)
+                if previo and previo[0] == c:
+                    desde = previo[1]
+                else:   # coordenada nueva (en la primera lectura no sabemos desde cuándo está)
+                    desde = ahora_min(ts) if previo else None
+                    self.coord_vista[tid] = (c, desde)
             pos[tid] = {"stop": stop, "estado": estado, "ts": ts, "via": via,
-                        "lat": (vh.get("position") or {}).get("latitude"),
-                        "lon": (vh.get("position") or {}).get("longitude")}
+                        "lat": lat, "lon": lon, "coord_desde": desde}
             clave = (tid, stop, "STOPPED_AT" if estado == "STOPPED_AT" else "MARCHA")
             if self.ultimo_estado.get(tid) != (stop, clave[2]):
-                # cambio de estado observado ahora mismo: sabemos cuándo pasó
-                self.primera.setdefault(clave, (ahora_min(ts), tid in self.ultimo_estado))
+                # cambio de estado observado ahora mismo: pasó entre la lectura anterior y esta,
+                # así que lo más probable es que fuera a mitad de camino entre ambas
+                previa = self.ts_lectura.get(tid)
+                cuando = ts if not previa or not 0 < ts - previa <= 90 else (ts + previa) / 2.0
+                self.primera.setdefault(clave, (ahora_min(cuando), tid in self.ultimo_estado))
                 self.ultimo_estado[tid] = (stop, clave[2])
+            self.ts_lectura[tid] = ts
         for e in actualizaciones.get("entity", []):
             tu = e.get("tripUpdate") or {}
             tid = (tu.get("trip") or {}).get("tripId", "")

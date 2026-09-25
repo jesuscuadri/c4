@@ -159,3 +159,6 @@ select{margin-bottom:12px}
   .chip-l{padding:6px 8px;font-size:12.5px}
 }
 .bm.sin-rumbo .bm-fl{display:none}
+
+.h-corto{display:none}
+@media (max-width:600px){.h-largo,.marca small{display:none}.h-corto{display:inline}}

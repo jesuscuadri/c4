@@ -47,16 +47,20 @@ class TestAprenderSesgos(unittest.TestCase):
         # en S3 hay sesgo pero pocas muestras -> se descarta
         filas += [("S3", 100.0, 103.0) for _ in range(3)]
         self._escribir(filas)
-        s = historial.aprender_sesgos(dias=30, minimo=6)
+        s = historial.aprender_sesgos(dias=30, minimo=6, desde="")
         self.assertIn("S1", s)
         self.assertAlmostEqual(s["S1"], 1.2, places=1)
         self.assertNotIn("S2", s)
         self.assertNotIn("S3", s)
 
+    def test_ignora_errores_del_modelo_antiguo(self):
+        self._escribir([("S1", 100.0, 101.2) for _ in range(8)])     # precision_20260920 (modelo viejo)
+        self.assertEqual(historial.aprender_sesgos(dias=30, minimo=6), {})
+
     def test_acotado(self):
         filas = [("S9", 100.0, 105.0) for _ in range(10)]   # sesgo grande (5 min, dentro del filtro)
         self._escribir(filas)
-        s = historial.aprender_sesgos(dias=30, minimo=6, cap=2.0)
+        s = historial.aprender_sesgos(dias=30, minimo=6, cap=2.0, desde="")
         self.assertLessEqual(abs(s["S9"]), 2.0)             # queda acotado
 
 
@@ -130,6 +134,24 @@ class TestRetrasoTipico(unittest.TestCase):
         self.assertIn("A|B", tramos)
         # salida y llegada se sitúan a mitad de camino entre lecturas: (t0+90) → (t0+240) = 2,5 min
         self.assertAlmostEqual(tramos["A|B"][0], 2.5, places=1)
+
+    def test_aprende_cuanto_dura_cada_parada(self):
+        # así lo da Renfe: parado en B, luego «IN_TRANSIT_TO B» (acaba de salir de B)
+        t0 = 1_800_000_000
+        filas = []
+        for d in range(6):
+            base = t0 + d * 86400
+            filas = [
+                [base, "2066V70252C4", "A", "IN_TRANSIT_TO", "0"],
+                [base + 60, "2066V70252C4", "B", "STOPPED_AT", "0"],     # llega a B (~base+30)
+                [base + 90, "2066V70252C4", "B", "STOPPED_AT", "0"],
+                [base + 120, "2066V70252C4", "B", "IN_TRANSIT_TO", "0"],  # sale de B (~base+105)
+            ]
+            self._obs("202609%02d" % (10 + d), filas)
+        tr, sa, pa = historial.resumir_dia(os.path.join(self.tmp, "obs_20260910.csv"), con_paradas=True)
+        self.assertAlmostEqual(pa["B"][0], 1.25, places=2)
+        p = historial.aprender_paradas(res=historial.resumen())
+        self.assertAlmostEqual(p["B"], 1.25, places=2)
 
     def test_aprender_salidas_mediana(self):
         res = {"tramos": {}, "salidas": {

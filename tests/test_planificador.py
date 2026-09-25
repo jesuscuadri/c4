@@ -136,3 +136,37 @@ class TestPlan(Base):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestMejorasUso(Base):
+    """Lo encontrado usando la app como un usuario normal."""
+
+    def test_lugar_por_palabras_completas(self):
+        self.assertEqual(P._lugar_en("la universidad laboral"), "universidad laboral")   # no el campus por «uni»
+        self.assertIsNone(P._lugar_en("pepito perez"))                                      # no es la EPI
+        g = P.geocodificar("la universidad laboral", self.L, self.bus, con_internet=False)
+        self.assertIn("Laboral", g["nombre"])
+
+    def test_sugerencias(self):
+        s = [x["nombre"] for x in P.sugerir("can", self.L, self.bus)]
+        self.assertTrue(s[0].startswith("Candás"), s)
+        self.assertNotIn("Vaticano (parada de bus)", s)       # «can» no empieza ninguna palabra
+        self.assertEqual(P.sugerir("x", self.L, self.bus), [])
+
+    def test_si_se_va_andando_no_hace_falta_salir_ya(self):
+        # desde el Humedal se va andando a la estación: la hora de salir se ajusta al tren
+        p = self.plan("Plaza del Humedal", "Candás", 8 * 60)
+        self.assertTrue(p["ok"])
+        tren = next(e for e in p["etapas"] if e["tipo"] == "tren")
+        self.assertGreaterEqual(p["sale"], 8 * 60)
+        self.assertLessEqual(tren["espera_estacion"], 2.5)     # llegas con el margen justo, no 40 min antes
+        self.assertAlmostEqual(p["duracion"], p["llega"] - p["sale"], places=1)
+
+    def test_otras_opciones(self):
+        p = self.plan("Xivares", "Candás", 8 * 60)
+        self.assertTrue(p["alternativas"])
+        self.assertGreater(p["alternativas"][0]["sale"], next(e for e in p["etapas"] if e["tipo"] == "tren")["sale"])
+
+    def test_mismo_sitio(self):
+        p = self.plan("Candás", "Candás", 8 * 60)
+        self.assertFalse(p["ok"])

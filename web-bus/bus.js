@@ -62,8 +62,13 @@ async function tickBuses() {
   if (!mapa || !capaBuses) return;
   let j;
   try { j = await (await fetch("/api/bus/coordenadas")).json(); }
-  catch (e) { return; }
-  if (!j || !j.vehiculos) { estadoChip(false); return; }
+  catch (e) { estadoChip(false); return; }
+  if (!j || !j.vehiculos || j.disponible === false) {
+    // EMTUSA no responde: decirlo claro en vez de «0 buses en circulación»
+    estadoChip(false);
+    $("vivo-cont").innerHTML = "EMTUSA no da posiciones ahora";
+    return;
+  }
   const vis = j.vehiculos.filter((v) => !filtroLinea || v.linea === filtroLinea);
   ultBuses = j.vehiculos.length;
   const cuenta = {};
@@ -242,7 +247,8 @@ function estiloParada(enLinea, color) {
 }
 function iniciarMapa() {
   if (mapa || !window.L) return;
-  mapa = L.map("mapa", { zoomControl: false, zoomSnap: 0.25 }).setView([43.5345, -5.6620], window.innerWidth < 600 ? 12.75 : 13.5);
+  // vista inicial: toda la zona urbana donde circulan los buses (antes se cortaba por los lados en el móvil)
+  mapa = L.map("mapa", { zoomControl: false, zoomSnap: 0.25 }).fitBounds([[43.506, -5.712], [43.551, -5.612]], { padding: [6, 6] });
   L.control.zoom({ position: "bottomright" }).addTo(mapa);
   mapa.attributionControl.setPrefix(false);
   // fondo limpio (lienzo gris de Esri, claro u oscuro), como en el mapa del tren
@@ -410,6 +416,11 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden && ta
   indexar();
   estadoChip(!!RED.hay_tiempo_real);
   const h = location.hash.slice(1);
+  const mp = /^parada-(\d+)$/.exec(h);        // enlace directo a una parada (desde la app del tren)
   irA(["vivo", "cerca", "buscar", "lineas", "favoritos", "tren"].includes(h) ? h : "vivo");
+  if (mp && PARADAS[+mp[1]]) {
+    const p = PARADAS[+mp[1]];
+    setTimeout(() => { if (mapa) mapa.setView([p.lat, p.lon], 16.5); abrirParada(p.id); }, 300);
+  }
   if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("/sw.js").catch(() => {});
 })();

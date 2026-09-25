@@ -43,6 +43,15 @@ CONFIG_DEFECTO = {
     "usar_tiempos_aprendidos": True,
     "usar_correccion_sesgo": True,      # aprende de los fallos: corrige sesgos por estación
     "usar_retraso_tipico": True,        # los trenes que aún no han salido llevan su retraso habitual
+    "renfe_en_marcha_desde": True,      # IN_TRANSIT_TO X de Renfe = acaba de salir de X
+    "usar_gps": True,                   # posición GPS del tren sobre la vía para saber cuánto le queda
+    "gps_vel_kmh": 60,                  # velocidad normal en marcha (para no fiarse de la holgura del horario)
+    "arranque_frenada_min": 0.6,        # lo que se pierde arrancando y frenando en cada tramo
+    "mezcla_oficial": True,             # lejos (>5 min) se mezcla con horario+retraso: medido, reduce el error
+    "mezcla_peso_min": 0.6,
+    "gps_max_km": 0.4,                  # más lejos de la vía que esto: posición no fiable
+    "adelanto_llegada_min": 0.5,        # Renfe marca «parado» al entrar en la estación: llegada algo antes
+    "parada_defecto_min": 1.5,          # parada real (de «entra» a «sale») si aún no se ha aprendido
     "sesgo_damp": 0.5,                  # cuánto se aplica del sesgo aprendido (0-1)
     "sesgo_cap": 1.0,                   # tope de la corrección por estación (min)
     "guardar_historial": True,

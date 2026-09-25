@@ -15,7 +15,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from . import gtfs
 from . import planificador
 from .estimador import Estimador
-from .historial import (Precision, aprender_salidas, aprender_sesgos, aprender_tiempos,
+from .historial import (Precision, aprender_paradas, aprender_salidas, aprender_sesgos, aprender_tiempos,
                         guardar_observaciones, guardar_resumen, resumen)
 from .linea import Linea
 from .tiemporeal import TiempoReal
@@ -40,6 +40,7 @@ class App:
         self.aprendidos = {}
         self.sesgos = {}
         self.salidas = {}
+        self.paradas = {}
         self.almacen = Almacen()               # guarda lo aprendido fuera del servidor (GitHub)
         self.ultimo_aprendizaje = 0
         self.errores_seguidos = 0
@@ -65,6 +66,7 @@ class App:
         with self.lock:
             self.linea = linea
             self.est = Estimador(linea, self.cfg, self.aprendidos, self.sesgos, self.salidas)
+            self.est.paradas = self.paradas
             self.rt = TiempoReal(self.cfg)
             self.precision = Precision()
             self.dia = hoy
@@ -99,6 +101,7 @@ class App:
         if time.time() - self.ultimo_aprendizaje > 3600:
             self.aprender()
             self.est.aprendidos, self.est.sesgos, self.est.salidas = self.aprendidos, self.sesgos, self.salidas
+            self.est.paradas = self.paradas
         calidad = self.rt.calidad()
         if calidad == "congelado":  # Renfe no actualiza: mejor el horario que datos viejos
             self.rt.pos, self.rt.act = {}, {}
@@ -118,6 +121,7 @@ class App:
             "tramos_aprendidos": len(self.aprendidos),
             "sesgos_corregidos": len(self.sesgos),
             "salidas_aprendidas": len(self.salidas),
+            "paradas_aprendidas": len(self.paradas),
             "modo_cruces": self.cfg["cruces"],
             "ts": round(time.time()),
         })
@@ -135,6 +139,7 @@ class App:
         self.aprendidos = aprender_tiempos(res=res) if self.cfg["usar_tiempos_aprendidos"] else {}
         self.salidas = aprender_salidas(res=res) if self.cfg.get("usar_retraso_tipico", True) else {}
         self.sesgos = aprender_sesgos() if self.cfg.get("usar_correccion_sesgo") else {}
+        self.paradas = aprender_paradas(res=res) if self.cfg["usar_tiempos_aprendidos"] else {}
         self.ultimo_aprendizaje = time.time()
 
     def manana(self, o_id, d_id):
@@ -166,7 +171,10 @@ class App:
         sal = sorted(self.salidas.items(), key=lambda kv: -kv[1])
         return {"guardado": self.almacen.estado(),
                 "tramos": len(ap), "sesgos_n": len(se), "sesgos": sesgos, "tramos_lista": tramos[:80],
-                "salidas_n": len(sal), "salidas": [{"num": n, "min": m} for n, m in sal[:12]]}
+                "salidas_n": len(sal), "salidas": [{"num": n, "min": m} for n, m in sal[:12]],
+                "paradas_n": len(self.paradas),
+                "paradas": [{"estacion": nom.get(s, s), "min": m}
+                            for s, m in sorted(self.paradas.items(), key=lambda kv: -kv[1])[:12]]}
 
     def geocode(self, q):
         with self.lock:
@@ -294,6 +302,11 @@ def servir(app, abrir=True, en_red=False, publico=False):
                     return self._json({"disponible": False, "error": str(e), "paradas": []})
             if ruta.startswith("/api/bus/parada/"):
                 return self._json(app.bus.llegadas(ruta.rsplit("/", 1)[-1]))
+            if ruta == "/api/sugerir":
+                q = parse_qs(urlparse(self.path).query)
+                with app.lock:
+                    linea = app.linea
+                return self._json({"sugerencias": planificador.sugerir(q.get("q", [""])[0], linea, app.bus)})
             if ruta == "/api/geocode":
                 q = parse_qs(urlparse(self.path).query)
                 return self._json(app.geocode(q.get("q", [""])[0]))
