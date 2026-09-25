@@ -3,7 +3,26 @@
 import json
 import time
 
-from .util import ahora_min, http_get
+import urllib.error
+import urllib.request
+
+from .util import ahora_min
+
+
+def http_get_cond(url, desde=None, timeout=20):
+    """GET condicional: (código, cuerpo, Last-Modified). Con 304 el cuerpo va vacío."""
+    cab = {"User-Agent": "Mozilla/5.0 (c4-tiempo-real)"}
+    if desde:
+        cab["If-Modified-Since"] = desde
+    req = urllib.request.Request(url, headers=cab)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.status, r.read(), r.headers.get("Last-Modified")
+    except urllib.error.HTTPError as e:
+        if e.code == 304:
+            return 304, b"", desde
+        raise
+
 
 RT_POSICIONES = "https://gtfsrt.renfe.com/vehicle_positions.json"
 RT_ACTUALIZACIONES = "https://gtfsrt.renfe.com/trip_updates.json"
@@ -23,19 +42,44 @@ class TiempoReal:
         self.ultimo_estado = {}  # trip -> (stop, estado)
         self.ts_lectura = {}     # trip -> marca de tiempo de la última lectura
         self.coord_vista = {}    # trip -> ((lat, lon), minuto en que apareció esa coordenada)
+        self._cache = {}         # url -> (datos, Last-Modified) para no descargar lo que no ha cambiado
+        self._avisos_json = None
+        self._t_avisos = 0.0
 
     # ------------------------------------------------------------------
+    def _leer(self, url, timeout=20):
+        """Lee un fichero de Renfe solo si ha cambiado (If-Modified-Since): si no, Renfe contesta
+        304 sin cuerpo y se reutiliza lo último. Devuelve (datos, cambiado)."""
+        previo = self._cache.get(url)
+        cod, cuerpo, lm = http_get_cond(url, previo[1] if previo else None, timeout)
+        if cod == 304 and previo:
+            return previo[0], False
+        datos = json.loads(cuerpo.decode("utf-8"))
+        self._cache[url] = (datos, lm)
+        return datos, True
+
+    def hay_novedades(self):
+        """¿Ha publicado Renfe posiciones nuevas? (petición casi gratis: normalmente un 304)."""
+        try:
+            return self._leer(RT_POSICIONES, 10)[1]
+        except Exception:  # noqa: BLE001
+            return False
+
     def consultar(self, filtro, rutas=(), paradas=()):
         try:
-            p = json.loads(http_get(RT_POSICIONES, 20).decode("utf-8"))
-            u = json.loads(http_get(RT_ACTUALIZACIONES, 20).decode("utf-8"))
+            p, _ = self._leer(RT_POSICIONES)
+            u, _ = self._leer(RT_ACTUALIZACIONES)
         except Exception as e:  # noqa: BLE001
             self.error = "No se pudo leer el tiempo real de Renfe (%s)" % e
             return False
-        try:
-            a = json.loads(http_get(RT_AVISOS, 20).decode("utf-8"))
-        except Exception:  # noqa: BLE001  (los avisos son opcionales)
-            a = None
+        a = None
+        if time.time() - self._t_avisos > 60 or self._avisos_json is None:   # los avisos cambian poco
+            try:
+                self._avisos_json, _ = self._leer(RT_AVISOS)
+                self._t_avisos = time.time()
+            except Exception:  # noqa: BLE001  (los avisos son opcionales)
+                pass
+        a = self._avisos_json
         self.cargar(p, u, filtro, a, rutas, paradas)
         return True
 

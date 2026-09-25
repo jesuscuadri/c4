@@ -65,8 +65,11 @@ async function cargarLinea() {
   }
 }
 async function cargarEstado() {
+  if (cargarEstado._en) return;            // no solapar peticiones
+  cargarEstado._en = true;
   try {
-    const j = await pedir("/api/estado");
+    const j = await pedir(R && R.version ? `/api/estado?v=${encodeURIComponent(R.version)}` : "/api/estado");
+    if (j.sin_cambios) { tRecibido = Date.now(); return; }   // nada nuevo: la respuesta pesa unos bytes
     if (j.cargando) { $("chip-txt").textContent = "Leyendo el tiempo real…"; return; }
     if (R && j.ts && R.ts && j.ts < R.ts) return;  // copia guardada más vieja que lo que ya tenemos
     if (LINEA && j.fecha && j.fecha !== LINEA.fecha) { await cargarLinea(); iniciarSelectores(); }
@@ -77,7 +80,7 @@ async function cargarEstado() {
     const c = $("chip"); c.className = "chip sin_conexion";
     $("chip-txt").textContent = R ? "Reconectando…" : "Despertando el servidor…";
     if (R) pintarEstado();
-  }
+  } finally { cargarEstado._en = false; }
 }
 async function cargarPrecision() {
   try {
@@ -620,8 +623,9 @@ function pintarTrenesMapa() {
     pintarTrenesMapa._cruces = R;
     for (const [e, m] of etiquetasEst) if (m._abierto) m.setPopupContent(popupEstacion(e.k));
   }
+  const tnow = performance.now();
   for (const t of R.trenes) {
-    const x = kmTren(t, now);
+    const x = posSuave(t, now, tnow);
     if (x == null) continue;
     const ll = latlonKm(x);
     if (!ll) continue;
@@ -631,23 +635,24 @@ function pintarTrenesMapa() {
     const ang = Math.round(rumbo(x, t.dir));
     const sel = t.id === trenSel, esMio = t.id === mio;
     const html = `<div class="tren-m ${t.dir > 0 ? "ida" : "vta"}${sel ? " sel" : ""}${esMio ? " mio" : ""}${t.con_datos ? "" : " sindatos"}">
-      <div class="tm-punto" style="background:${colorDirHex(t.dir)}"><svg class="tm-flecha" width="16" height="16" viewBox="-8 -8 16 16" aria-hidden="true"><path transform="rotate(${ang})" d="M6 0 L-4 -5 L-1.5 0 L-4 5 Z" fill="#fff"/></svg></div>
+      <div class="tm-punto" style="background:${colorDirHex(t.dir)}"><svg class="tm-flecha" width="16" height="16" viewBox="-8 -8 16 16" aria-hidden="true"><path d="M6 0 L-4 -5 L-1.5 0 L-4 5 Z" fill="#fff"/></svg></div>
       <div class="tm-etq">${esMio ? '<span class="tm-mio">★</span>' : ""}<b>${esMio ? `llega a ${esc(vm.a)} ${hm(vm.lle)}` : "→ " + esc(destinoCorto(t))}</b><span class="tm-r ${rc}">${t.con_datos ? (r > 0 ? "+" + r : "✓") : "?"}</span></div></div>`;
     let m = marcas[t.id];
     if (!m) {
       m = marcas[t.id] = L.marker(ll, { icon: L.divIcon({ html, className: "", iconSize: null }), zIndexOffset: 1000, riseOnHover: true })
         .on("click", (ev) => { L.DomEvent.stopPropagation(ev); seleccionarTren(t.id); }).addTo(capaTrenes);
-      m._html = html;
+      m._html = html; m._ang = null;
     } else {
       m.setLatLng(ll);
-      if (m._html !== html) { m.setIcon(L.divIcon({ html, className: "", iconSize: null })); m._html = html; }
+      // el icono solo se rehace si cambia lo que pone (no por moverse ni girar): así no parpadea
+      if (m._html !== html) { m.setIcon(L.divIcon({ html, className: "", iconSize: null })); m._html = html; m._ang = null; }
     }
+    girar(m, ang);
     m.setZIndexOffset(sel ? 3000 : esMio ? 2000 : 1000);
     if (sel) {
       if (!pintarTrenesMapa._rutaT || now - pintarTrenesMapa._rutaT > 0.25 || pintarTrenesMapa._rutaId !== t.id) {
         pintarRutaSel(t, x); pintarTrenesMapa._rutaT = now; pintarTrenesMapa._rutaId = t.id;
       }
-      if (seguir) mapa.panTo(ll, { animate: true, duration: 0.8 });
     }
   }
   for (const id of Object.keys(marcas)) if (!vivos.has(id)) { capaTrenes.removeLayer(marcas[id]); delete marcas[id]; }
@@ -655,6 +660,54 @@ function pintarTrenesMapa() {
   pintarFichaTren();
   despejarEtiquetas();
 }
+
+/* ---------------------------------------------------------------- movimiento fluido
+   Los datos llegan cada pocos segundos, pero los trenes se dibujan ~30 veces por segundo en su
+   posición calculada para ese instante. Cuando llega un dato nuevo que corrige la posición, el tren
+   no salta: se desliza hasta ella en menos de un segundo. */
+const SUAVE = {};   // id -> {x (km mostrado), t (ms)}
+function posSuave(t, now, tnow) {
+  const obj = kmTren(t, now);
+  if (obj == null) { delete SUAVE[t.id]; return null; }
+  const s = SUAVE[t.id];
+  if (!s || Math.abs(obj - s.x) > 2.5) { SUAVE[t.id] = { x: obj, t: tnow }; return obj; }  // lejos: se coloca sin más
+  const dt = Math.max(0, Math.min(1000, tnow - s.t)) / 1000;
+  s.t = tnow;
+  const dif = obj - s.x;
+  // si el dato nuevo lo deja un poco por detrás, el tren no retrocede: espera a que la posición real
+  // lo alcance (un tren nunca va marcha atrás). Si la corrección es grande, se desliza hasta ella.
+  if (dif * t.dir < 0 && Math.abs(dif) < 0.25) return s.x;
+  s.x += dif * (1 - Math.exp(-dt / 0.9));
+  return s.x;
+}
+function girar(m, ang) {
+  if (m._ang === ang || !m._icon) return;
+  const p = m._icon.querySelector(".tm-flecha path");
+  if (p) { p.setAttribute("transform", `rotate(${ang})`); m._ang = ang; }
+}
+let ultFrame = 0;
+function moverTrenes(tnow) {
+  requestAnimationFrame(moverTrenes);
+  if (tabActual !== "mapa" || !mapa || !R || document.hidden || mapa._animatingZoom) return;
+  if (tnow - ultFrame < 33) return;          // ~30 imágenes por segundo: fluido sin gastar batería
+  ultFrame = tnow;
+  const now = ahora();
+  let llSel = null;
+  for (const t of R.trenes) {
+    const m = marcas[t.id];
+    if (!m) continue;
+    const x = posSuave(t, now, tnow);
+    if (x == null) continue;
+    const ll = latlonKm(x);
+    if (!ll) continue;
+    m.setLatLng(ll);
+    girar(m, Math.round(rumbo(x, t.dir)));
+    if (t.id === trenSel) llSel = ll;
+  }
+  // «Seguir tren»: el mapa acompaña al tren de forma continua, como un navegador
+  if (seguir && llSel) mapa.panTo(llSel, { animate: false });
+}
+requestAnimationFrame(moverTrenes);
 
 /* Etiquetas sin solapes, como en los mapas profesionales: lo que se mueve (los trenes) manda.
    - La etiqueta de un tren solo se desplaza un poco (o cambia de lado) si pisa a otro tren o un cruce.
@@ -1450,7 +1503,8 @@ function prepararIphone() {
   const hash = location.hash.slice(1);
   await cargarEstado();
   irA(["inicio", "ir", "viaje", "estacion", "mapa", "malla", "cruces", "precision", "info"].includes(hash) ? hash : "inicio");
-  setInterval(cargarEstado, 15000);
+  // cada 3 s se pregunta si hay datos nuevos (casi gratis si no los hay); con la app en segundo plano, no
+  setInterval(() => { if (!document.hidden) cargarEstado(); }, 3000);
   setInterval(() => { if (tabActual === "viaje" && R && document.activeElement !== $("andar")) pintarViaje(); }, 20000);
   document.addEventListener("visibilitychange", () => { if (!document.hidden) cargarEstado(); });
   window.addEventListener("pageshow", () => cargarEstado());

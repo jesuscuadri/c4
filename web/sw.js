@@ -2,7 +2,7 @@
    - Páginas y estilos: se piden a la red; si tarda más de 3 s, se usa la copia guardada.
    - Datos (/api/estado, /api/linea): igual, con 8 s; la app avisa si son datos antiguos.
    - Mapa (Leaflet): se guarda la primera vez. Las teselas del mapa no se guardan. */
-const VERSION = "c4-v12";
+const VERSION = "c4-v13";
 const BASICOS = ["/", "/index.html", "/app.js", "/estilos.css", "/manifest.json", "/icono-180.png", "/icono-192.png"];
 
 self.addEventListener("install", (e) => {
@@ -43,7 +43,16 @@ self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== "GET") return;
   if (url.origin === location.origin) {
-    if (url.pathname === "/api/estado" || url.pathname === "/api/linea") {
+    if (url.pathname === "/api/estado" && url.search) {
+      // sondeo rápido (?v=…): siempre a la red y sin guardar copias; si no hay red, la última copia buena
+      e.respondWith(fetch(e.request).then((r) => {
+        if (r.ok) {
+          const copia = r.clone();
+          copia.json().then((j) => { if (!j.sin_cambios && !j.cargando) caches.open(VERSION).then((c) => c.put("/api/estado", new Response(JSON.stringify(j), { headers: { "Content-Type": "application/json" } }))); }).catch(() => {});
+        }
+        return r;
+      }).catch(() => caches.open(VERSION).then((c) => c.match("/api/estado")).then((m) => m || Response.error())));
+    } else if (url.pathname === "/api/estado" || url.pathname === "/api/linea") {
       e.respondWith(redPrimero(e.request, 8000, true));
     } else if (url.pathname.startsWith("/api/")) {
       return; // precisión, mañana, ping: siempre a la red

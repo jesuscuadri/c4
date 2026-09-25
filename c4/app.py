@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Bucle de actualización y servidor web local."""
+import gzip
 import json
 import mimetypes
 import os
@@ -35,6 +36,9 @@ class App:
         self.est = None
         self.rt = None
         self.res = None
+        self._estado_bytes = None
+        self._version = 0
+        self._arranque = int(time.time())
         self.linea_json = None
         self.precision = Precision()
         self.aprendidos = {}
@@ -123,8 +127,10 @@ class App:
             "salidas_aprendidas": len(self.salidas),
             "paradas_aprendidas": len(self.paradas),
             "modo_cruces": self.cfg["cruces"],
-            "ts": round(time.time()),
+            "ts": round(time.time(), 3),
         })
+        self._version += 1
+        res["version"] = "%d-%d" % (self._arranque, self._version)   # único aunque el servidor se reinicie
         with self.lock:
             self.res = res
 
@@ -214,9 +220,19 @@ class App:
         if self.almacen.activo:
             self.almacen.cargar()
             threading.Thread(target=ciclo_guardado, args=(self.almacen,), daemon=True).start()
+        ultimo = 0.0
         while True:
             try:
+                # Renfe publica posiciones cada ~20 s. Se le pregunta cada pocos segundos si hay algo
+                # nuevo (normalmente contesta «sin cambios» sin mandar nada) y, en cuanto lo hay,
+                # se recalcula al momento: así lo que ves va unos segundos por detrás de Renfe, no 30-40.
+                # Aunque no haya novedades, se recalcula cada intervalo (el tiempo pasa).
+                if self.linea and time.time() - ultimo < self.cfg["intervalo_consulta_s"] \
+                        and not self.rt.hay_novedades():
+                    time.sleep(self.cfg.get("intervalo_rapido_s", 3))
+                    continue
                 self.ciclo()
+                ultimo = time.time()
                 self.errores_seguidos = 0
             except Exception as e:  # noqa: BLE001
                 self.errores_seguidos += 1
@@ -227,7 +243,7 @@ class App:
                     self.error_inicio = None if self.linea else str(e)
                     if self.res:
                         self.res["error"] = str(e)
-            time.sleep(self.cfg["intervalo_consulta_s"] if self.linea else 10)
+            time.sleep(self.cfg.get("intervalo_rapido_s", 3) if self.linea else 10)
 
 
 def ip_local():
@@ -246,9 +262,18 @@ def servir(app, abrir=True, en_red=False, publico=False):
         def log_message(self, *a):
             pass
 
-        def _enviar(self, cuerpo, tipo, codigo=200):
+        def _enviar(self, cuerpo, tipo, codigo=200, gz=None):
+            # comprimido si el navegador lo acepta (el estado pasa de ~200 KB a ~25 KB: llega antes)
+            if gz is None and len(cuerpo) > 2048 and "gzip" in (self.headers.get("Accept-Encoding") or ""):
+                gz = gzip.compress(cuerpo, 5)
+            usar_gz = gz is not None and "gzip" in (self.headers.get("Accept-Encoding") or "")
+            if usar_gz:
+                cuerpo = gz
             self.send_response(codigo)
             self.send_header("Content-Type", tipo)
+            if usar_gz:
+                self.send_header("Content-Encoding", "gzip")
+                self.send_header("Vary", "Accept-Encoding")
             self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(cuerpo)))
             self.end_headers()
@@ -260,8 +285,20 @@ def servir(app, abrir=True, en_red=False, publico=False):
         def do_GET(self):
             ruta = self.path.split("?")[0]
             if ruta == "/api/estado":
+                q = parse_qs(urlparse(self.path).query)
                 with app.lock:
-                    return self._json(app.res or {"cargando": True})
+                    res = app.res
+                    if not res:
+                        return self._json({"cargando": True})
+                    # el móvil pregunta cada pocos segundos con la versión que tiene: si no hay nada
+                    # nuevo se contesta con unos bytes; si lo hay, el estado entero (ya comprimido)
+                    if q.get("v", [""])[0] == str(res.get("version")):
+                        return self._json({"sin_cambios": True, "version": res.get("version")})
+                    cache = app._estado_bytes
+                    if not cache or cache[0] is not res:
+                        crudo = json.dumps(res, ensure_ascii=False).encode("utf-8")
+                        cache = app._estado_bytes = (res, crudo, gzip.compress(crudo, 5))
+                return self._enviar(cache[1], "application/json; charset=utf-8", gz=cache[2])
             if ruta == "/api/linea":
                 with app.lock:
                     if app.linea_json:

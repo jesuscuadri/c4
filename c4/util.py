@@ -28,7 +28,8 @@ CONFIG_DEFECTO = {
     "linea": "C4",
     "prefijo_nucleo": "20T",            # 20 = núcleo de Asturias en el GTFS de Renfe
     "puerto": 8765,
-    "intervalo_consulta_s": 20,
+    "intervalo_consulta_s": 20,         # recalcular al menos cada 20 s
+    "intervalo_rapido_s": 3,            # preguntar a Renfe si hay datos nuevos cada 3 s
     "margen_cruce_min": 0.5,            # desde que entra el tren contrario hasta que sale el que espera
     "margen_seguimiento_min": 0.5,
     "usar_rotaciones": True,
