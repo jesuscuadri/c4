@@ -1,0 +1,22 @@
+name: Despertar el servidor
+on:
+  schedule:
+    - cron: "*/20 3-5 * * *"
+  workflow_dispatch:
+jobs:
+  despertar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Llamar a la web hasta que responda
+        env:
+          URL: https://c4-1-lgfj.onrender.com
+        run: |
+          for i in 1 2 3 4 5 6; do
+            if curl -fsS --max-time 90 "$URL/api/ping"; then
+              curl -fsS --max-time 60 -o /dev/null "$URL/api/linea" || true
+              exit 0
+            fi
+            sleep 15
+          done
+          exit 1
