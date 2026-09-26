@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Lectura del tiempo real de Renfe (GTFS-Realtime en JSON)."""
+import email.utils
 import json
 import time
 
@@ -56,7 +57,34 @@ class TiempoReal:
             return previo[0], False
         datos = json.loads(cuerpo.decode("utf-8"))
         self._cache[url] = (datos, lm)
+        if url == RT_POSICIONES and lm:
+            self._publicado(lm)
         return datos, True
+
+    # Renfe publica un fichero nuevo exactamente cada 20 s (medido el 26/09: 18:14:39, :59, 15:19…).
+    # Sabiendo cuándo salió el último, se pide el siguiente justo cuando toca, sin esperar a ciegas.
+    PERIODO_RENFE_S = 20.0
+
+    def _publicado(self, lm):
+        try:
+            t = email.utils.parsedate_to_datetime(lm).timestamp()
+        except Exception:  # noqa: BLE001
+            return
+        previo = getattr(self, "_t_pub", None)
+        if previo and 5 < t - previo < 120:
+            # periodo real (por si Renfe lo cambia): múltiplo más cercano del último medido
+            n = max(1, round((t - previo) / self.PERIODO_RENFE_S))
+            self._periodo = 0.7 * getattr(self, "_periodo", self.PERIODO_RENFE_S) + 0.3 * ((t - previo) / n)
+        self._t_pub = t
+
+    def proxima_publicacion(self):
+        """Hora (epoch) a la que se espera el próximo fichero de posiciones de Renfe, o None."""
+        t = getattr(self, "_t_pub", None)
+        if t is None:
+            return None
+        per = getattr(self, "_periodo", self.PERIODO_RENFE_S)
+        n = max(1, int((time.time() - t) // per) + 1)
+        return t + n * per
 
     def hay_novedades(self):
         """¿Ha publicado Renfe posiciones nuevas? (petición casi gratis: normalmente un 304)."""

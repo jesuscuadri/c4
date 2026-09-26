@@ -86,6 +86,8 @@ async function cargarEstado() {
       const d = hs - (t0 + t1) / 2000;
       DESFASE = Math.abs(d - DESFASE) > 2 ? d : DESFASE * 0.7 + d * 0.3;
     }
+    // Renfe publica cada 20 s justos: el servidor dice cuándo tendrá el siguiente dato y se pide entonces
+    if (j.sig_s) { clearTimeout(cargarEstado._sig); cargarEstado._sig = setTimeout(() => { if (!document.hidden) cargarEstado(); }, j.sig_s * 1000); }
     if (j.sin_cambios) { tRecibido = Date.now(); return; }   // nada nuevo: la respuesta pesa unos bytes
     if (j.cargando) { $("chip-txt").textContent = "Leyendo el tiempo real…"; return; }
     if (R && j.ts && R.ts && j.ts < R.ts) return;  // copia guardada más vieja que lo que ya tenemos
@@ -193,7 +195,8 @@ function aviso(txt) {
   t.textContent = txt; t.hidden = false;
   clearTimeout(aviso._t); aviso._t = setTimeout(() => { t.hidden = true; }, 2600);
 }
-const fiabilidad = (t) => ({ "GPS": ["ok", "GPS en directo"], "posición": ["ok", "Posición en directo"], "Renfe": ["ok", "Dato de Renfe"],
+// si el tren que hará el servicio aún no ha llegado, lo de Renfe «en el andén» no es una posición real
+const fiabilidad = (t) => t.material ? null : ({ "GPS": ["ok", "GPS en directo"], "posición": ["ok", "Posición en directo"], "Renfe": ["ok", "Dato de Renfe"],
   "posición (aprox.)": ["warn", "Posición aproximada"] }[t.fuente] || null);
 
 async function pintarManana(o, d) {
@@ -247,7 +250,7 @@ function pintarViaje() {
       <div class="tv-cab">
         <div>
           <div class="tv-tren"><span class="bola" style="background:${colorDir(t.dir)}"></span>→ ${esc(destinoCorto(t))}${tagEstado(t, jo)}${numT(t.num)}</div>
-          <div class="tv-sit">${esc(t.situacion)}${t.via ? ` · vía ${esc(t.via)}` : ""}${fia ? ` · <span class="fia ${fia[0]}">${fia[1]}</span>` : ""}</div>
+          <div class="tv-sit">${esc(t.situacion)}${t.via && !t.material ? ` · vía ${esc(t.via)}` : ""}${fia ? ` · <span class="fia ${fia[0]}">${fia[1]}</span>` : ""}</div>
         </div>
         <div class="tv-grande"><div class="h num">${hmS(sal)}</div><div class="l">${cuando}</div><div class="l2">llega <b class="num">${hm(lle)}</b></div></div>
       </div>${casa}
@@ -1534,7 +1537,7 @@ function prepararIphone() {
   await cargarEstado();
   irA(["inicio", "ir", "viaje", "estacion", "mapa", "malla", "cruces", "precision", "info"].includes(hash) ? hash : "inicio");
   // cada 3 s se pregunta si hay datos nuevos (casi gratis si no los hay); con la app en segundo plano, no
-  setInterval(() => { if (!document.hidden) cargarEstado(); }, 2000);
+  setInterval(() => { if (!document.hidden) cargarEstado(); }, 3000);   // además de la cita con Renfe (sig_s)
   setInterval(() => { if (tabActual === "viaje" && R && document.activeElement !== $("andar")) pintarViaje(); }, 20000);
   document.addEventListener("visibilitychange", () => { if (!document.hidden) cargarEstado(); });
   window.addEventListener("pageshow", () => cargarEstado());

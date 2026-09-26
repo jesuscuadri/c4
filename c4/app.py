@@ -230,7 +230,7 @@ class App:
                 # Aunque no haya novedades, se recalcula cada intervalo (el tiempo pasa).
                 if self.linea and time.time() - ultimo < self.cfg["intervalo_consulta_s"] \
                         and not self.rt.hay_novedades():
-                    time.sleep(self.cfg.get("intervalo_rapido_s", 3))
+                    time.sleep(self._espera_renfe())
                     continue
                 self.ciclo()
                 ultimo = time.time()
@@ -244,7 +244,18 @@ class App:
                     self.error_inicio = None if self.linea else str(e)
                     if self.res:
                         self.res["error"] = str(e)
-            time.sleep(self.cfg.get("intervalo_rapido_s", 3) if self.linea else 10)
+            time.sleep(self._espera_renfe() if self.linea else 10)
+
+    def _espera_renfe(self):
+        """Hasta la siguiente consulta a Renfe: justo después de cuando le toca publicar (medio segundo
+        de margen); si se retrasa, cada segundo; si aún no se sabe su ritmo, cada intervalo_rapido_s."""
+        sig = self.rt.proxima_publicacion() if self.rt is not None else None
+        if sig is None:
+            return self.cfg.get("intervalo_rapido_s", 2)
+        falta = sig + 0.6 - time.time()
+        if falta < -0.5:
+            return 1.0
+        return max(0.3, min(falta, self.cfg.get("intervalo_rapido_s", 2) * 5))
 
 
 def ip_local():
@@ -295,8 +306,11 @@ def servir(app, abrir=True, en_red=False, publico=False):
                         return self._json({"cargando": True})
                     # el móvil pregunta cada pocos segundos con la versión que tiene: si no hay nada
                     # nuevo se contesta con unos bytes; si lo hay, el estado entero (ya comprimido)
+                    # cuándo volver a preguntar: justo después de la próxima publicación de Renfe
+                    sig = app.rt.proxima_publicacion() if app.rt is not None else None
+                    sig_s = round(max(0.5, sig + 1.6 - time.time()), 1) if sig else None
                     if q.get("v", [""])[0] == str(res.get("version")):
-                        return self._json({"sin_cambios": True, "version": res.get("version")})
+                        return self._json({"sin_cambios": True, "version": res.get("version"), "sig_s": sig_s})
                     cache = app._estado_bytes
                     if not cache or cache[0] is not res:
                         crudo = json.dumps(res, ensure_ascii=False).encode("utf-8")

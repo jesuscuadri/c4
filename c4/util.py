@@ -35,7 +35,11 @@ CONFIG_DEFECTO = {
     "usar_rotaciones": True,
     "vuelta_minima_min": 4,             # tiempo mínimo para dar la vuelta en cabecera
     "rotacion_espera_max_min": 10,      # si el material llega muy tarde, suponemos que ponen otro tren
-    "parada_minima_min": 0.4,           # parada mínima cuando el tren va tarde y recorta
+    "parada_minima_min": 1.0,           # parada mínima cuando el tren va tarde y recorta (medido 25-26/09: ~1 min)
+    # En las paradas intermedias el tren sale ~0,7 min después de su hora (puertas, la hora del horario es
+    # el minuto entero; medido con el GPS en las grabaciones del 25-26/09). La hora que se enseña se
+    # redondea hacia abajo, así que sigue siendo el minuto del horario: nunca te hace llegar tarde.
+    "salida_tras_hora_min": 0.7,
     "cruces": "fijos",                  # "fijos" | "dinamicos"
     "umbral_cambio_cruce_min": 8,
     "estaciones_cruce_extra": ["Soto del Barco", "Regueral"],   # tienen vía de cruce aunque el horario casi no las use (visto 26/09)

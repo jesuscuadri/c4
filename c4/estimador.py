@@ -451,7 +451,7 @@ class Estimador:
                         # la parada programada ya va en el horario; si va tarde puede acortarla.
                         # Lo que se adelantó la llegada (ver _recorrido) se pasa parado.
                         parada = min(v.sd[j] - v.sa[j], pmin) + (self._adelanto_en(v, j - 1) if j > 0 else 0.0)
-                        if j > 0 and a > v.sa[j] + 0.5:
+                        if j > 0 and a > v.sa[j] + 0.5 + self.cfg.get("salida_tras_hora_min", 0.0):
                             # tren con retraso (no tiene margen del horario que absorba la parada):
                             # medido en directo, entre «entra» y «sale» pasa como mínimo ~1 min; si ya se
                             # ha aprendido lo que dura la parada en esta estación, se usa eso

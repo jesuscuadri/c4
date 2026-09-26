@@ -111,3 +111,18 @@ class TestGPS(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestRitmoRenfe(unittest.TestCase):
+    def test_proxima_publicacion(self):
+        import email.utils
+        import time
+        from c4.tiemporeal import TiempoReal
+        from c4.util import CONFIG_DEFECTO
+        rt = TiempoReal(dict(CONFIG_DEFECTO))
+        self.assertIsNone(rt.proxima_publicacion())
+        ahora = time.time()
+        for k in (3, 2, 1):   # Renfe publicó hace 60, 40 y 20 s (+5 s)
+            rt._publicado(email.utils.formatdate(ahora - 20 * k - 5, usegmt=True))
+        sig = rt.proxima_publicacion()
+        self.assertAlmostEqual(sig - ahora, 15, delta=1.1)
