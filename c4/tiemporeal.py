@@ -90,6 +90,8 @@ class TiempoReal:
         except (TypeError, ValueError):
             self.ts_feed = None
         pos, act = {}, {}
+        # el fichero de Renfe llega sin ningún tren de toda España: caída de su servicio (pasa)
+        self.vacio = not posiciones.get("entity")
         for e in posiciones.get("entity", []):
             vh = e.get("vehicle") or {}
             tid = (vh.get("trip") or {}).get("tripId", "")
@@ -179,10 +181,13 @@ class TiempoReal:
         return self.primera.get((tid, stop, "STOPPED_AT" if parado else "MARCHA"))
 
     def calidad(self, ahora_ts=None):
-        """'directo', 'congelado' (Renfe no actualiza) o 'sin_conexion'."""
+        """'directo', 'congelado' (Renfe no actualiza), 'sin_posiciones' (Renfe publica el fichero
+        pero vacío, sin ningún tren) o 'sin_conexion'."""
         ahora_ts = ahora_ts or time.time()
         if self.ts_consulta is None or ahora_ts - self.ts_consulta > 3 * self.cfg["intervalo_consulta_s"] + 60:
             return "sin_conexion"
         if self.ts_feed and ahora_ts - self.ts_feed > self.cfg["datos_viejos_s"]:
             return "congelado"
+        if getattr(self, "vacio", False):
+            return "sin_posiciones"
         return "directo"

@@ -12,8 +12,14 @@ const hm = (m) => {
   m = Math.round(m);
   return String(Math.floor(m / 60) % 24).padStart(2, "0") + ":" + String(((m % 60) + 60) % 60).padStart(2, "0");
 };
-const ahora = () => (!R ? 0 : R.ts ? R.ahora + (Date.now() / 1000 - R.ts) / 60 : R.ahora + (Date.now() - tRecibido) / 60000);
-const edadDatos = () => (R && R.ts ? Date.now() / 1000 - R.ts : 0);  // segundos desde que el servidor calculó
+// Hora de SALIDA: se redondea hacia abajo. Si sale a las 18:25:40, decir «18:26» haría perder el tren.
+const hmS = (m) => (m == null || isNaN(m) ? "--:--" : hm(Math.floor(m + 1e-6)));
+// Si el reloj del móvil va adelantado o atrasado, las cuentas atrás («sale en 3 min») estarían mal:
+// se usa la hora del servidor (cabecera X-Hora-Servidor) para corregirlo.
+let DESFASE = 0;   // segundos: hora del servidor − hora del móvil
+const ahoraSeg = () => Date.now() / 1000 + DESFASE;
+const ahora = () => (!R ? 0 : R.ts ? R.ahora + (ahoraSeg() - R.ts) / 60 : R.ahora + (Date.now() - tRecibido) / 60000);
+const edadDatos = () => (R && R.ts ? ahoraSeg() - R.ts : 0);  // segundos desde que el servidor calculó
 async function pedir(url, ms = 12000) {
   const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), ms);
   try { return await (await fetch(url, { signal: ctl.signal })).json(); } finally { clearTimeout(t); }
@@ -68,7 +74,18 @@ async function cargarEstado() {
   if (cargarEstado._en) return;            // no solapar peticiones
   cargarEstado._en = true;
   try {
-    const j = await pedir(R && R.version ? `/api/estado?v=${encodeURIComponent(R.version)}` : "/api/estado");
+    const url = R && R.version ? `/api/estado?v=${encodeURIComponent(R.version)}` : "/api/estado";
+    const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), 12000);
+    const t0 = Date.now();
+    let resp;
+    try { resp = await fetch(url, { signal: ctl.signal }); } finally { clearTimeout(tm); }
+    const t1 = Date.now(), hs = +resp.headers.get("X-Hora-Servidor");
+    const j = await resp.json();
+    // solo con respuestas recién hechas (rápidas y con la hora dentro de lo razonable)
+    if (hs && t1 - t0 < 3000 && (!j.ts || Math.abs(hs - j.ts) < 120)) {
+      const d = hs - (t0 + t1) / 2000;
+      DESFASE = Math.abs(d - DESFASE) > 2 ? d : DESFASE * 0.7 + d * 0.3;
+    }
     if (j.sin_cambios) { tRecibido = Date.now(); return; }   // nada nuevo: la respuesta pesa unos bytes
     if (j.cargando) { $("chip-txt").textContent = "Leyendo el tiempo real…"; return; }
     if (R && j.ts && R.ts && j.ts < R.ts) return;  // copia guardada más vieja que lo que ya tenemos
@@ -97,8 +114,9 @@ function pintarEstado() {
   c.className = "chip " + (viejo ? "congelado" : R.calidad);
   const txt = { directo: `En directo · ${R.con_posicion} trenes localizados`,
                 congelado: "Renfe no actualiza · usando horario",
+                sin_posiciones: "Renfe no da posiciones · último retraso conocido",
                 sin_conexion: "Sin conexión con Renfe · usando horario" }[R.calidad];
-  const corto = { directo: "En directo", congelado: "Sin datos Renfe", sin_conexion: "Sin conexión" }[R.calidad];
+  const corto = { directo: "En directo", congelado: "Sin datos Renfe", sin_posiciones: "Renfe sin datos", sin_conexion: "Sin conexión" }[R.calidad];
   $("chip-txt").innerHTML = viejo ? `<span class="txt">Actualizando…</span><span class="corto">Actualizando…</span>`
     : `<span class="txt">${txt}</span><span class="corto">${corto}</span>`;
   c.title = `Última lectura ${R.actualizado}` + (R.ts_feed ? ` · datos de Renfe de las ${R.ts_feed}` : "");
@@ -107,6 +125,8 @@ function pintarEstado() {
     h += `<div class="aviso warn"><span>⏳</span><div><b>Datos de las ${esc(R.actualizado.slice(0, 5))}.</b> El servidor se está despertando o no hay conexión: en cuanto responda se actualiza solo.</div></div>`;
   if (R.calidad === "congelado")
     h += `<div class="aviso warn"><span>⚠</span><div><b>Los datos en tiempo real de Renfe están parados</b> (último dato ${R.ts_feed || "?"}). Mientras tanto se calcula con el horario, así que las esperas por cruces con trenes retrasados no se ven.</div></div>`;
+  if (R.calidad === "sin_posiciones")
+    h += `<div class="aviso warn"><span>⚠</span><div><b>Renfe no está publicando la posición de ningún tren</b> (su servicio de tiempo real va vacío en toda España). Mientras tanto cada tren sigue con el último retraso que se le vio; los que no se habían visto, con el horario.</div></div>`;
   if (R.calidad === "sin_conexion")
     h += `<div class="aviso bad" title="${esc(R.error || "")}"><span>⚠</span><div><b>No se puede leer el tiempo real de Renfe ahora mismo.</b> Mientras tanto se muestra el horario oficial; en cuanto vuelva, se actualiza solo.</div></div>`;
   for (const a of R.avisos || []) h += `<div class="aviso info"><span>ℹ</span><div><b>Aviso de Renfe:</b> ${esc(a)}</div></div>`;
@@ -205,7 +225,7 @@ function pintarViaje() {
   let primero = true;
   $("viajes").innerHTML = v.map(({ t, jo, jd, mot, antes }) => {
     const sal = t.est_d[jo], lle = t.est_a[jd], app = t.adif_a[jd], dif = lle - app;
-    const falta = Math.round(sal - now);
+    const falta = Math.floor(sal - now);
     const cuando = falta <= 0 ? "sale ahora" : falta < 60 ? `sale en ${falta} min` : `sale en ${Math.floor(falta / 60)} h ${falta % 60} min`;
     const cambiaSal = Math.abs(sal - t.prog_d[jo]) >= 1, cambiaLle = Math.abs(lle - t.prog_a[jd]) >= 1;
     const salirCasa = sal - andar, margen = salirCasa - now;
@@ -215,25 +235,25 @@ function pintarViaje() {
     let casa = "";
     if (andar > 0) casa = perdido
       ? `<div class="casa perdido">🚶 Andando (${andar} min) ya no llegas a este tren</div>`
-      : `<div class="casa${margen <= 3 ? " prisa" : ""}">🚶 Sal de casa ${margen < 1 ? "<b>ya</b>" : `a las <b class="num">${hm(salirCasa)}</b> (en ${Math.round(margen)} min)`}</div>`;
+      : `<div class="casa${margen <= 3 ? " prisa" : ""}">🚶 Sal de casa ${margen < 1 ? "<b>ya</b>" : `a las <b class="num">${hmS(salirCasa)}</b> (en ${Math.floor(margen)} min)`}</div>`;
     let aviso = "";
     if (t.con_datos && dif >= 1) aviso = `<div class="dif">La app oficial dirá <b class="num">${hm(app)}</b>. Llegarás sobre las <b class="num">${hm(lle)}</b> (<b>+${Math.round(dif)} min</b>).</div>`;
     else if (t.con_datos && dif <= -1) aviso = `<div class="dif bien">Llegarás antes de lo que dice la app oficial (${hm(app)}): recupera ${Math.round(-dif)} min con los márgenes del horario.</div>`;
     const lis = antes.map((m) => `<li class="antes">Antes de tu estación: ${esc(m.texto)} (+${Math.round(m.min)} min)</li>`)
       .concat(mot.map((m) => `<li>${esc(m.texto)} (+${Math.round(m.min)} min)</li>`)).join("");
     const fia = fiabilidad(t);
-    const texto = `Voy en la C-4 hacia ${destinoCorto(t)} (sale de ${nombreCorto(est(o).nombre)} a las ${hm(sal)}). Llego a ${nombreCorto(est(d).nombre)} sobre las ${hm(lle)}.`;
+    const texto = `Voy en la C-4 hacia ${destinoCorto(t)} (sale de ${nombreCorto(est(o).nombre)} a las ${hmS(sal)}). Llego a ${nombreCorto(est(d).nombre)} sobre las ${hm(lle)}.`;
     return `<div class="tv${destacado ? " primero" : ""}${perdido ? " perdido" : ""}" data-tren="${t.id}" data-jo="${jo}" data-jd="${jd}">
       <div class="tv-cab">
         <div>
           <div class="tv-tren"><span class="bola" style="background:${colorDir(t.dir)}"></span>→ ${esc(destinoCorto(t))}${tagEstado(t, jo)}${numT(t.num)}</div>
           <div class="tv-sit">${esc(t.situacion)}${t.via ? ` · vía ${esc(t.via)}` : ""}${fia ? ` · <span class="fia ${fia[0]}">${fia[1]}</span>` : ""}</div>
         </div>
-        <div class="tv-grande"><div class="h num">${hm(sal)}</div><div class="l">${cuando}</div><div class="l2">llega <b class="num">${hm(lle)}</b></div></div>
+        <div class="tv-grande"><div class="h num">${hmS(sal)}</div><div class="l">${cuando}</div><div class="l2">llega <b class="num">${hm(lle)}</b></div></div>
       </div>${casa}
       <div class="cmp num">
         <span></span><span class="c">Horario</span><span class="c">App oficial</span><span class="c">Estimado</span>
-        <span class="c" style="align-self:center">Sale</span><span class="${cambiaSal ? "x" : ""}">${hm(t.prog_d[jo])}</span><span>${hm(t.adif_d[jo])}</span><span class="e">${hm(sal)}</span>
+        <span class="c" style="align-self:center">Sale</span><span class="${cambiaSal ? "x" : ""}">${hm(t.prog_d[jo])}</span><span>${hm(t.adif_d[jo])}</span><span class="e">${hmS(sal)}</span>
         <span class="c" style="align-self:center">Llega</span><span class="${cambiaLle ? "x" : ""}">${hm(t.prog_a[jd])}</span><span>${hm(app)}</span><span class="e">${hm(lle)}</span>
       </div>${aviso}${lis ? `<ul class="motivos">${lis}</ul>` : ""}
       <div class="tv-acciones"><button type="button" class="btn-mini" data-compartir="${esc(texto)}">Compartir llegada</button><span class="pp-sub">Toca la tarjeta para ver todo el recorrido</span></div></div>`;
@@ -296,7 +316,7 @@ function pintarEstacion() {
         const mot = t.motivos.find((m) => m.j === j);
         const retr = s - t.prog_d[j];
         return `<tr class="clic${aqui ? " aqui" : ""}" data-tren="${t.id}" data-jo="${j}">
-          <td><span class="e">${hm(s)}</span>${Math.abs(retr) >= 1 ? `<br><span style="color:var(--mut);text-decoration:line-through">${hm(t.prog_d[j])}</span>` : ""}</td>
+          <td><span class="e">${hmS(s)}</span>${Math.abs(retr) >= 1 ? `<br><span style="color:var(--mut);text-decoration:line-through">${hm(t.prog_d[j])}</span>` : ""}</td>
           <td>→ ${esc(destinoCorto(t))} ${numT(t.num)}${aqui ? `<br><span class="tag ok" style="margin:0">En andén${t.via ? " · vía " + esc(t.via) : ""}</span>` : ""}</td>
           <td>${tagEstado(t, j)}${cr ? `<br><span style="font-size:12px;color:var(--tx2)">Cruza aquí con ${elQueVa(cr.ida.id === t.id ? cr.vuelta.id : cr.ida.id)}</span>` : ""}${mot ? `<br><span style="font-size:12px;color:var(--warn)">Espera ${Math.round(mot.min)} min</span>` : ""}</td></tr>`;
       }).join("") + `</tbody></table>`;
@@ -357,6 +377,10 @@ function retrasoEn(t, j) {
 // Etiqueta de estado de un tren en una estación: retraso real si hay datos; si no, «suele +N» o «Previsto»
 function tagEstado(t, j) {
   if (t.con_datos) return tagRetraso(retrasoEn(t, j));
+  if (t.ultimo_dato != null) {
+    const r = Math.round(retrasoEn(t, j));
+    return `<span class="tag ${r <= 0 ? "gris" : r <= 5 ? "warn" : "bad"}" title="Renfe no da su posición ahora; hace ${t.ultimo_dato} min iba así">${r > 0 ? "+" + r + " min" : "en hora"} · hace ${t.ultimo_dato < 1 ? "<1" : t.ultimo_dato}′</span>`;
+  }
   if (t.tipico >= 1) return `<span class="tag warn" title="Retraso habitual de este tren, aprendido de días anteriores">suele +${Math.round(t.tipico)}</span>`;
   return `<span class="tag gris" title="Sin datos en directo: hora del horario">Previsto</span>`;
 }
@@ -631,12 +655,13 @@ function pintarTrenesMapa() {
     if (!ll) continue;
     vivos.add(t.id);
     const r = Math.round(retrasoActual(t));
-    const rc = !t.con_datos ? "gris" : r <= 0 ? "ok" : r <= 5 ? "warn" : "bad";
+    const visto = t.con_datos || t.ultimo_dato != null;   // en directo, o visto hace poco
+    const rc = !visto ? "gris" : r <= 0 ? "ok" : r <= 5 ? "warn" : "bad";
     const ang = Math.round(rumbo(x, t.dir));
     const sel = t.id === trenSel, esMio = t.id === mio;
     const html = `<div class="tren-m ${t.dir > 0 ? "ida" : "vta"}${sel ? " sel" : ""}${esMio ? " mio" : ""}${t.con_datos ? "" : " sindatos"}">
       <div class="tm-punto" style="background:${colorDirHex(t.dir)}"><svg class="tm-flecha" width="16" height="16" viewBox="-8 -8 16 16" aria-hidden="true"><path d="M6 0 L-4 -5 L-1.5 0 L-4 5 Z" fill="#fff"/></svg></div>
-      <div class="tm-etq">${esMio ? '<span class="tm-mio">★</span>' : ""}<b>${esMio ? `llega a ${esc(vm.a)} ${hm(vm.lle)}` : "→ " + esc(destinoCorto(t))}</b><span class="tm-r ${rc}">${t.con_datos ? (r > 0 ? "+" + r : "✓") : "?"}</span></div></div>`;
+      <div class="tm-etq">${esMio ? '<span class="tm-mio">★</span>' : ""}<b>${esMio ? `llega a ${esc(vm.a)} ${hm(vm.lle)}` : "→ " + esc(destinoCorto(t))}</b><span class="tm-r ${rc}">${visto ? (r > 0 ? "+" + r : "✓") + (t.con_datos ? "" : "?") : "?"}</span></div></div>`;
     let m = marcas[t.id];
     if (!m) {
       m = marcas[t.id] = L.marker(ll, { icon: L.divIcon({ html, className: "", iconSize: null }), zIndexOffset: 1000, riseOnHover: true })
@@ -964,6 +989,7 @@ function pintarCruces() {
 }
 
 /* ---------------------------------------------------------------- precisión */
+const fechaCorta = (f) => f ? `${+f.slice(6, 8)}/${+f.slice(4, 6)}` : "";
 const dec = (v, n = 1) => (+v).toFixed(n).replace(".", ",");
 function tarjetaAprendizaje() {
   if (!APREN || APREN.cargando) return "";
@@ -1005,7 +1031,7 @@ function pintarPrecision() {
   let h = `<div class="veredicto ${gana ? "ok" : "warn"}">${gana
       ? `<b>Sí:</b> se equivoca de media <b>${dec(tot.error_nuestro)} min</b>; la app oficial, <b>${dec(tot.error_adif)} min</b>.`
       : `<b>Todavía no:</b> se equivoca de media ${dec(tot.error_nuestro)} min y la app oficial ${dec(tot.error_adif)} min. Está aprendiendo.`}
-      <span class="sub"> ${tot.n} llegadas medidas en los últimos 7 días.</span></div>`;
+      <span class="sub"> ${tot.n} llegadas medidas${PREC.incluye_modelo_anterior ? " con la versión anterior del cálculo (la actual empieza a medirse el " + fechaCorta(PREC.modelo_desde) + ")" : PREC.modelo_desde ? " con el cálculo actual (desde el " + fechaCorta(PREC.modelo_desde) + ")" : " en los últimos 7 días"}.</span></div>`;
   h += `<div class="kpis kpis-4">` +
     kpi(`${dec(tot.error_nuestro)} min`, "error medio de esta app", "yo") +
     kpi(`${dec(tot.error_adif)} min`, "error medio de la app oficial") +
@@ -1090,13 +1116,13 @@ function pintarCajon() {
       (j === (t.parado ? t.j0 : proximaJ(t)) && !t.fin ? `<div style="font-size:12.5px;font-weight:700;color:var(--c4)">◀ ${esc(t.situacion)}</div>` : "");
     filas.push(`<tr class="${pasado ? "pasado" : ""}${j === jo || j === jd ? " aqui" : ""}">
       <td>${e.cruce ? "<b>" : ""}${esc(e.nombre)}${e.cruce ? "</b>" : ""}${notas}</td>
-      <td>${hm(hProg)}</td><td>${pasado ? "" : hm(hApp)}</td><td class="e">${pasado ? "" : hm(hEst)}${!pasado && salida && j > 0 ? `<div class="sub" style="font-weight:400">sale</div>` : ""}</td></tr>`);
+      <td>${hm(hProg)}</td><td>${pasado ? "" : hm(hApp)}</td><td class="e">${pasado ? "" : (salida ? hmS(hEst) : hm(hEst))}${!pasado && salida && j > 0 ? `<div class="sub" style="font-weight:400">sale</div>` : ""}</td></tr>`);
   }
   $("cajon").innerHTML = `<div class="cajon-cab"><div><h2>→ ${esc(destinoCorto(t))} ${numT(t.num)}</h2>
       <div style="color:var(--tx2)">${esc(t.origen)} → ${esc(t.destino)}</div></div>
       <button class="cerrar" id="cerrar" aria-label="Cerrar">×</button></div>
     <div class="datos"><span class="tag ${t.dir > 0 ? "ida" : "vta"}" style="margin:0">${t.dir > 0 ? "Hacia Cudillero/Avilés" : "Hacia Gijón"}</span>
-      ${t.con_datos ? tagRetraso(retrasoActual(t)).replace('class="tag', 'style="margin:0" class="tag') : '<span class="tag gris" style="margin:0">Sin datos en tiempo real</span>'}
+      ${(t.con_datos || t.ultimo_dato != null) ? tagEstado(t, Math.min(t.j0, t.k.length - 1)).replace('class="tag', 'style="margin:0" class="tag') : '<span class="tag gris" style="margin:0">Sin datos en tiempo real</span>'}
       ${t.via ? `<span class="tag gris" style="margin:0">Vía ${esc(t.via)}</span>` : ""}
       <span class="tag gris" style="margin:0">Fuente: ${esc(t.fuente)}</span></div>
     <p style="margin:0 0 10px;color:var(--tx2)">${esc(t.situacion)}</p>
@@ -1121,7 +1147,7 @@ function proxDesde(k, n) {
 function pintarInicio() {
   if (!R || !LINEA) return;
   const viejo = edadDatos() > 90;
-  const meta = { directo: ["ok", "En directo"], congelado: ["warn", "Renfe no actualiza"], sin_conexion: ["bad", "Sin conexión con Renfe"] };
+  const meta = { directo: ["ok", "En directo"], congelado: ["warn", "Renfe no actualiza"], sin_posiciones: ["warn", "Renfe no da posiciones"], sin_conexion: ["bad", "Sin conexión con Renfe"] };
   const [cls, lbl] = viejo ? ["warn", "Actualizando…"] : (meta[R.calidad] || ["", "En directo"]);
   const prox = (R.cruces || []).find((c) => c.hora >= R.ahora - 1);
   let h = `<div class="dash">`;
@@ -1149,11 +1175,11 @@ function pintarInicio() {
     const v = viajesEntre(o, d, 2), now = ahora();
     h += `<div class="mini-ruta">${esc(nombreCorto(est(o).nombre))} <span class="mr-fl">→</span> ${esc(nombreCorto(est(d).nombre))}</div>`;
     h += v.length ? v.map(({ t, jo, jd }) => {
-      const sal = t.est_d[jo], lle = t.est_a[jd], falta = Math.round(sal - now);
+      const sal = t.est_d[jo], lle = t.est_a[jd], falta = Math.floor(sal - now);
       return `<div class="mini-tren" data-tren="${t.id}" data-jo="${jo}" data-jd="${jd}">
         <div class="mt-l"><div class="mt-dest"><span class="bola" style="background:${colorDir(t.dir)}"></span><b>→ ${esc(destinoCorto(t))}</b>${tagEstado(t, jo)}</div>
           <div class="mt-sub">llega a ${esc(nombreCorto(est(d).nombre))} <b class="num">${hm(lle)}</b></div></div>
-        <div class="mt-r"><span class="mt-lle num">${hm(sal)}</span><span class="mt-when">${falta <= 0 ? "sale ya" : falta < 60 ? "sale en " + falta + " min" : "sale"}</span></div></div>`;
+        <div class="mt-r"><span class="mt-lle num">${hmS(sal)}</span><span class="mt-when">${falta <= 0 ? "sale ya" : falta < 60 ? "sale en " + falta + " min" : "sale"}</span></div></div>`;
     }).join("") : `<div class="vacio">No quedan trenes hoy en este trayecto.</div>`;
   }
   h += `</div>`;
@@ -1174,12 +1200,12 @@ function pintarInicio() {
 // «Ahora en la línea»: cada tren circulando, dónde está y cómo va
 function tarjetaLinea() {
   const now = ahora();
-  const ts = R.trenes.filter((t) => !t.fin && !t.cancelado && t.con_datos && !(t.j0 === 0 && t.est_d[0] > now + 1));
+  const ts = R.trenes.filter((t) => !t.fin && !t.cancelado && (t.con_datos || t.ultimo_dato != null) && !(t.j0 === 0 && t.est_d[0] > now + 1));
   const fila = (t) => {
     const j = t.parado ? Math.min(t.j0, t.k.length - 1) : proximaJ(t);
     const sig = t.parado ? `sale ${hm(t.est_d[j])}` : `${esc(nombreCorto(est(t.k[j]).nombre))} ${hm(t.est_a[j])}`;
     return `<div class="al-f clic" data-tren="${t.id}"><span class="bola" style="background:${colorDir(t.dir)}"></span>
-      <div class="al-m"><div><b>→ ${esc(destinoCorto(t))}</b>${tagRetraso(retrasoActual(t))}</div><div class="al-s">${esc(t.situacion)}</div></div>
+      <div class="al-m"><div><b>→ ${esc(destinoCorto(t))}</b>${tagEstado(t, j)}</div><div class="al-s">${esc(t.situacion)}</div></div>
       <div class="al-h num">${sig}</div></div>`;
   };
   const grupo = (dir, tit) => {
@@ -1212,7 +1238,7 @@ function inicioCerca() {
     const sal = proxDesde(e.k, 3);
     const lejos = dk(e) > 1.2;
     let h = `<div class="cerca-est"><div class="ce-cab">🚉 <b>${esc(e.nombre)}</b> <span class="sub">a ${dk(e) < 1 ? Math.round(dk(e) * 1000) + " m" : dec(dk(e)) + " km"}</span></div>`;
-    h += sal.length ? sal.map((s) => `<div class="ce-fila"><span class="tag ${s.dir > 0 ? "ida" : "vta"}">→ ${esc(nombreCorto(s.destino))}</span><span class="ce-mid">${tagEstado(s.t, s.t.k.indexOf(e.k))}</span><b class="num">${hm(s.sale)}</b></div>`).join("") : `<div class="vacio">Sin trenes próximos.</div>`;
+    h += sal.length ? sal.map((s) => `<div class="ce-fila"><span class="tag ${s.dir > 0 ? "ida" : "vta"}">→ ${esc(nombreCorto(s.destino))}</span><span class="ce-mid">${tagEstado(s.t, s.t.k.indexOf(e.k))}</span><b class="num">${hmS(s.sale)}</b></div>`).join("") : `<div class="vacio">Sin trenes próximos.</div>`;
     if (lejos) h += `<button class="link" id="cerca-ruta" style="margin-top:6px">🧭 Cómo llegar desde aquí a un tren ›</button>`;
     h += `</div>`;
     b.disabled = false; b.textContent = "📍 Actualizar mi posición";
@@ -1447,7 +1473,7 @@ function pintarPlan(p) {
     } else if (e.tipo === "tren") {
       h += `<li class="et tren"><span class="et-ico">🚆</span><div class="et-cuerpo">
         <div class="et-t">Tren <b>C-4</b> → ${esc(nombreCorto(e.destino || ""))}${e.retraso >= 1 ? ` <span class="tag ${e.retraso <= 5 ? "warn" : "bad"}" style="margin:0 0 0 4px">+${Math.round(e.retraso)} min</span>` : ""}</div>
-        <div class="et-horas num"><span>${hm(e.sale)} <b>${esc(nombreCorto(e.desde))}</b></span><span class="et-fl">→</span><span>${hm(e.llega)} <b>${esc(nombreCorto(e.hasta))}</b></span></div>
+        <div class="et-horas num"><span>${hmS(e.sale)} <b>${esc(nombreCorto(e.desde))}</b></span><span class="et-fl">→</span><span>${hm(e.llega)} <b>${esc(nombreCorto(e.hasta))}</b></span></div>
         ${e.espera_estacion >= 3 ? `<div class="et-sub">Esperas ${Math.round(e.espera_estacion)} min en la estación</div>` : ""}
         ${(e.motivos || []).map((m) => `<div class="et-cruce">⇄ ${esc(m.texto)} <span class="et-min warn2">+${Math.round(m.min)}</span></div>`).join("")}
       </div></li>`;
@@ -1513,7 +1539,7 @@ function prepararIphone() {
   }
   setInterval(() => { if (tabActual === "precision") cargarPrecision(); }, 300000);
   setInterval(() => {
-    $("reloj").textContent = new Date().toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    $("reloj").textContent = new Date(ahoraSeg() * 1000).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
     if (tabActual === "mapa") pintarTrenesMapa();
   }, 1000);
 })();

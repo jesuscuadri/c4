@@ -4,6 +4,7 @@ import csv
 import json
 import os
 import statistics
+import time
 from collections import defaultdict
 from datetime import date, timedelta
 
@@ -41,7 +42,7 @@ def guardar_observaciones(rt, linea):
 RESUMEN = "aprendizaje.json"
 # Desde este día el modelo interpreta bien el «IN_TRANSIT_TO» de Renfe y usa el GPS: los
 # errores medidos antes eran de otro modelo y no sirven para corregir sesgos del actual.
-MODELO_DESDE = "20260926"
+MODELO_DESDE = "20260927"
 
 
 def num_servicio(tid):
@@ -105,19 +106,32 @@ def _leer_resumen():
         return {"tramos": {}, "salidas": {}, "paradas": {}}
 
 
+# Cada arranque del servidor es una «sesión». Lo observado en esta sesión se guarda con la clave
+# AAAAMMDD_sesión, para no pisar lo guardado de sesiones anteriores del mismo día (en Render el
+# disco se vacía al reiniciar o redesplegar: antes, un reinicio a media tarde borraba lo aprendido
+# esa mañana).
+SESION = "%d" % time.time()
+
+
+def _por_dias(dic, dias):
+    """Entradas (clave, valor) de los últimos `dias` días distintos (la clave empieza por AAAAMMDD)."""
+    fechas = sorted({k[:8] for k in dic})[-dias:]
+    return [(k, v) for k, v in sorted(dic.items()) if k[:8] in fechas]
+
+
 def resumen(dias=45):
-    """Lo aprendido por día: lo guardado (días anteriores, aunque el servidor se haya reiniciado)
-    más lo que se saque de las observaciones que haya en disco (el día de hoy manda)."""
+    """Lo aprendido por día: lo guardado (días y sesiones anteriores, aunque el servidor se haya
+    reiniciado) más lo que se saque de las observaciones de esta sesión que haya en disco."""
     res = _leer_resumen()
     if os.path.isdir(HIST):
         for fn in sorted(f for f in os.listdir(HIST) if f.startswith("obs_"))[-dias:]:
-            fecha = fn[4:12]
+            clave = "%s_%s" % (fn[4:12], SESION)
             tr, sa, pa = resumir_dia(os.path.join(HIST, fn), con_paradas=True)
             if tr or sa:
-                res["tramos"][fecha], res["salidas"][fecha] = tr, sa
-                res["paradas"][fecha] = pa
-    for clave in ("tramos", "salidas", "paradas"):
-        res[clave] = {f: v for f, v in sorted(res[clave].items())[-dias:]}
+                res["tramos"][clave], res["salidas"][clave] = tr, sa
+                res["paradas"][clave] = pa
+    for c in ("tramos", "salidas", "paradas"):
+        res[c] = dict(_por_dias(res[c], dias))
     return res
 
 
@@ -135,7 +149,7 @@ def aprender_tiempos(dias=30, res=None):
     """Mediana del tiempo real de marcha entre paradas consecutivas (necesita 5 muestras)."""
     res = res or resumen()
     muestras = defaultdict(list)
-    for fecha, tramos in sorted(res["tramos"].items())[-dias:]:
+    for fecha, tramos in _por_dias(res["tramos"], dias):
         for clave, vals in tramos.items():
             a_, b_ = clave.split("|", 1)
             muestras[(a_, b_)].extend(vals)
@@ -148,7 +162,7 @@ def aprender_paradas(dias=30, minimo=5, res=None):
     cuando se usan tiempos de marcha aprendidos (que no incluyen la parada)."""
     res = res or resumen()
     muestras = defaultdict(list)
-    for fecha, pa in sorted((res.get("paradas") or {}).items())[-dias:]:
+    for fecha, pa in _por_dias(res.get("paradas") or {}, dias):
         for stop, vals in pa.items():
             muestras[stop].extend(x for x in vals if 0 < x <= 5)
     out = {}
@@ -166,8 +180,12 @@ def aprender_salidas(dias=21, minimo=4, res=None):
     Solo se guardan los servicios que suelen salir con al menos 1 minuto de retraso."""
     res = res or resumen()
     por_num = defaultdict(list)
-    for fecha, sal in sorted(res["salidas"].items())[-dias:]:
+    vistos = set()     # (día, tren): un valor por día aunque haya varias sesiones
+    for fecha, sal in _por_dias(res["salidas"], dias):
         for num, r in sal.items():
+            if (fecha[:8], num) in vistos:
+                continue
+            vistos.add((fecha[:8], num))
             if -5 <= r <= 45:
                 por_num[num].append(r)
     out = {}
@@ -257,11 +275,22 @@ class Precision:
         return filas
 
     @staticmethod
-    def estadisticas(dias=7):
+    def estadisticas(dias=7, desde=None):
+        """Acierto de los últimos días. Solo cuenta desde que se estrenó el modelo actual (MODELO_DESDE):
+        comparar con errores de versiones anteriores no diría nada de cómo acierta ahora. Si aún no
+        hay mediciones del modelo actual, se enseñan las anteriores avisándolo."""
+        desde = MODELO_DESDE if desde is None else desde
         hoy = date.today()
+        dias_ok = [hoy - timedelta(days=n) for n in range(dias)]
+        if not any(d.strftime("%Y%m%d") >= desde and os.path.exists(_fichero("precision", d)) for d in dias_ok):
+            desde, anterior = "", True
+        else:
+            anterior = False
         grupos = {"hoy": defaultdict(list), "semana": defaultdict(list)}
         for n in range(dias):
             d = hoy - timedelta(days=n)
+            if d.strftime("%Y%m%d") < desde:
+                continue
             ruta = _fichero("precision", d)
             if not os.path.exists(ruta):
                 continue
@@ -292,4 +321,6 @@ class Precision:
             out[periodo] = {str(h): resumen(g.get(h, [])) for h in HORIZONTES}
             todas = [x for h in HORIZONTES for x in g.get(h, [])]
             out[periodo]["total"] = resumen(todas)
+        out["modelo_desde"] = MODELO_DESDE
+        out["incluye_modelo_anterior"] = anterior
         return out

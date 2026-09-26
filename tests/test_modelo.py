@@ -92,25 +92,41 @@ class TestEscenarios(Base):
     def test_sin_tiempo_real_coincide_con_horario(self):
         rt = TiempoReal(self.cfg)
         res = self.calcular(rt, h("05:00"))
-        # salidas: exactamente las del horario; llegadas: como mucho medio minuto antes (Renfe da
-        # el tren por «parado» al entrar en la estación, antes de la hora redonda del horario)
-        dev_d = max(abs(t["est_d"][j] - t["prog_d"][j]) for t in res["trenes"] for j in range(len(t["k"]) - 1))
-        self.assertLess(dev_d, 0.31)   # (tramos de 0 min en el horario: se cuentan 0,3 min de marcha)
-        dev = max(abs(t["est_a"][j] - t["prog_a"][j]) for t in res["trenes"] for j in range(len(t["k"])))
-        self.assertLessEqual(dev, self.cfg["adelanto_llegada_min"] + 1e-6)
-        self.assertEqual([m for t in res["trenes"] for m in t["motivos"]], [])
+        # Sin datos en directo todo va según el horario, salvo donde el propio horario es imposible
+        # en vía única: los hace coincidir entre El Parador y Soto del Barco, y uno tiene que esperar
+        # al otro en Soto (así se vio en directo el 26/09). Esas esperas tienen que estar explicadas.
+        for t in res["trenes"]:
+            con_motivo = {m["j"] for m in t["motivos"]}
+            for j in range(len(t["k"]) - 1):
+                if abs(t["est_d"][j] - t["prog_d"][j]) > 0.55:   # (esperas de medio minuto no se explican)
+                    self.assertTrue(any(i <= j for i in con_motivo), (t["num"], j))
+        for t in res["trenes"]:
+            for m in t["motivos"]:      # solo cruces que el horario hace imposibles, y cortos
+                self.assertEqual(m["tipo"], "cruce")
+                self.assertLessEqual(m["min"], 5)
+        # llegadas: nunca más tarde que el horario (salvo tras esas esperas); antes sí, donde el
+        # horario tiene holgura (el tren llega antes y espera a su hora de salida)
+        dev = max(t["est_a"][j] - t["prog_a"][j] for t in res["trenes"] for j in range(len(t["k"])) if not t["motivos"])
+        self.assertLessEqual(dev, 0.55)     # (tramos de 0 min y esperas de medio minuto)
 
     def test_ejemplo_xivares_gijon(self):
-        """El 70303 (hacia Gijón) debe esperar en Veriña al 70210, que sale 7 min tarde de Gijón."""
+        """El 70303 (hacia Gijón) debe esperar en Veriña al 70210, que sale 7 min tarde de Gijón.
+        (A las 10:03 el 70210, que salía a las 09:56, sigue parado en Gijón. El «retraso» que da Renfe
+        para un tren en su estación de origen no sirve: se mide por el tiempo que lleva allí.)"""
         rt = TiempoReal(self.cfg)
-        self.lectura(rt, h("09:59"), [("70303", "05209", "IN_TRANSIT_TO"), ("70210", "15410", "STOPPED_AT")],
-                     [("70303", "05208", 0), ("70210", "15410", 7)])
-        res = self.calcular(rt, h("09:59"))
+        self.lectura(rt, h("10:03"), [("70303", "05208", "STOPPED_AT"), ("70210", "15410", "STOPPED_AT")],
+                     [("70303", "05208", 0)])
+        res = self.calcular(rt, h("10:03"))
         f = self.fila(res, "70303", "Xivares", "Gijón")
         t, jd = f["tren"], f["jd"]
         self.assertAlmostEqual(t["adif_a"][jd], h("10:18"), delta=0.6)   # lo que diría la app
-        self.assertGreaterEqual(t["est_a"][jd], h("10:21"))               # la realidad
         self.assertTrue(any("Veriña" in m["texto"] and m["con"] == "70210" for m in f["motivos"]))
+        # la espera se nota: llega más tarde que si el 70210 hubiera salido a su hora
+        rt2 = TiempoReal(self.cfg)
+        self.lectura(rt2, h("10:03"), [("70303", "05208", "STOPPED_AT"), ("70210", "05208", "IN_TRANSIT_TO")],
+                     [("70303", "05208", 0)])
+        sin_espera = self.fila(self.calcular(rt2, h("10:03")), "70303", "Xivares", "Gijón")["tren"]["est_a"][jd]
+        self.assertGreater(t["est_a"][jd], sin_espera + 1)
 
     def test_tren_contrario_retrasado_retiene_al_que_sale(self):
         rt = TiempoReal(self.cfg)
@@ -119,7 +135,10 @@ class TestEscenarios(Base):
         res = self.calcular(rt, h("09:59"))
         f = self.fila(res, "70210", "Gijón", "Avilés")
         self.assertTrue(any(m["tipo"] == "cruce" and m["con"] == "70303" for m in f["motivos"]))
-        self.assertGreater(f["tren"]["est_a"][f["jd"]], f["tren"]["adif_a"][f["jd"]] + 1)
+        # la espera por el cruce retrasa su salida de ese apartadero respecto al horario
+        m = next(m for m in f["motivos"] if m["tipo"] == "cruce" and m["con"] == "70303")
+        t = f["tren"]
+        self.assertGreater(t["est_d"][m["j"]], t["prog_d"][m["j"]] + 1)
 
     def test_cruce_trasladado(self):
         """Si uno ya pasó el apartadero del cruce programado, el cruce se hace en el siguiente."""
@@ -207,3 +226,41 @@ class TestRetrocesos(Base):
         res = est.calcular(rt, t0 + 0.25)
         t = next(x for x in res["trenes"] if x["num"] == "70210")
         self.assertIn("Veriña", t["situacion"])
+
+
+class TestSinDatosRenfe(Base):
+    def test_si_renfe_deja_de_mandar_un_tren_sigue_con_su_ultimo_retraso(self):
+        """Sábado 26/09: el tiempo real de Renfe quedó vacío en toda España. Un tren que iba con
+        retraso no pasa de golpe a «en hora»: sigue con el último retraso visto."""
+        v = self.tren("70251")
+        rt = TiempoReal(self.cfg)
+        est = Estimador(self.L, dict(self.cfg))
+        self.lectura(rt, h("08:05"), [("70251", "05209", "STOPPED_AT")])     # Perlora con ~12 min
+        r1 = est.calcular(rt, h("08:05"))
+        t1 = next(x for x in r1["trenes"] if x["num"] == "70251")
+        self.assertGreater(t1["retraso"], 5)
+        P = {"header": {"timestamp": str(int(ts(h("08:07"))))}}             # fichero vacío
+        rt.cargar(P, {"entity": []}, ahora_ts=ts(h("08:07")))
+        self.assertEqual(rt.calidad(ahora_ts=ts(h("08:07"))), "sin_posiciones")
+        r2 = est.calcular(rt, h("08:07"))
+        t2 = next(x for x in r2["trenes"] if x["num"] == "70251")
+        self.assertFalse(t2["con_datos"])
+        self.assertEqual(t2["ultimo_dato"], 2)
+        self.assertAlmostEqual(t2["retraso"], t1["retraso"], delta=0.01)
+        jg = t2["k"].index(self.L.buscar("Gijón"))
+        self.assertGreater(t2["est_a"][jg], v.sa[v.stop_j[self.L.est[self.L.buscar("Gijón")]]] + 5)
+
+
+class TestRetrasoRenfeEnOrigen(Base):
+    def test_contador_de_renfe_en_origen_no_retrasa_la_salida(self):
+        """25/09: el 70254 esperaba en Gijón para salir a su hora y Renfe decía +7 (su «retraso» es un
+        contador que sube mientras el tren está en el andén). Salió con +1,4. La app oficial dice +7;
+        nosotros, a su hora."""
+        v = self.tren("70210")
+        rt = TiempoReal(self.cfg)
+        antes = v.sd[0] - 1
+        self.lectura(rt, antes, [("70210", "15410", "STOPPED_AT")], [("70210", "15410", 7)])
+        res = self.calcular(rt, antes)
+        t = next(x for x in res["trenes"] if x["num"] == "70210")
+        self.assertAlmostEqual(t["est_d"][0], v.sd[0], delta=0.2)
+        self.assertAlmostEqual(t["adif_d"][0], v.sd[0] + 7, delta=0.2)   # la columna «app oficial» sigue siendo la de Renfe

@@ -120,7 +120,7 @@ class App:
             "ts_feed": datetime.fromtimestamp(self.rt.ts_feed).strftime("%H:%M:%S") if self.rt.ts_feed else None,
             "error": self.rt.error,
             "avisos": self.rt.avisos,
-            "con_posicion": sum(1 for t in res["trenes"] if t["fuente"] != "horario" and not t["fin"]),
+            "con_posicion": sum(1 for t in res["trenes"] if t["con_datos"] and not t["fin"]),
             "en_circulacion": sum(1 for t in res["trenes"] if not t["fin"] and t["j0"] > 0 or t["parado"] and not t["fin"] and t["con_datos"]),
             "tramos_aprendidos": len(self.aprendidos),
             "sesgos_corregidos": len(self.sesgos),
@@ -275,6 +275,8 @@ def servir(app, abrir=True, en_red=False, publico=False):
                 self.send_header("Content-Encoding", "gzip")
                 self.send_header("Vary", "Accept-Encoding")
             self.send_header("Cache-Control", "no-store")
+            # hora del servidor: el móvil la usa para corregir si su reloj va adelantado o atrasado
+            self.send_header("X-Hora-Servidor", "%.3f" % time.time())
             self.send_header("Content-Length", str(len(cuerpo)))
             self.end_headers()
             self.wfile.write(cuerpo)

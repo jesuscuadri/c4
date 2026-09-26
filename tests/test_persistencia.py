@@ -96,12 +96,12 @@ class GitHubFalso:
 class TestPersistencia(unittest.TestCase):
     def setUp(self):
         self.gh = GitHubFalso()
-        self._api, self._hist = persistencia.API, historial.HIST
+        self._api, self._hist, self._sesion = persistencia.API, historial.HIST, historial.SESION
         persistencia.API = self.gh.url
         historial.HIST = tempfile.mkdtemp()
 
     def tearDown(self):
-        persistencia.API, historial.HIST = self._api, self._hist
+        persistencia.API, historial.HIST, historial.SESION = self._api, self._hist, self._sesion
         self.gh.parar()
 
     def _aprender_algo(self):
@@ -112,6 +112,32 @@ class TestPersistencia(unittest.TestCase):
             w = csv.writer(f)
             w.writerow(persistencia.CABECERA_PRECISION)
             w.writerow(["2026-09-20", "T1", "S1", 10, "100.00", "101.00", "101.20"])
+
+    def _obs(self, filas):
+        ruta = os.path.join(historial.HIST, "obs_20260925.csv")
+        with open(ruta, "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(["ts", "trip", "stop", "estado", "retraso_min"])
+            w.writerows(filas)
+
+    def test_reinicio_a_media_tarde_no_borra_lo_de_la_manana(self):
+        """Visto en Render: tras un redespliegue, lo observado después pisaba lo de antes ese día."""
+        t0 = 1_790_000_000
+        un_tramo = lambda base, trip: [[base, trip, "A", "STOPPED_AT", "0"], [base + 60, trip, "A", "IN_TRANSIT_TO", "0"],
+                                       [base + 240, trip, "B", "STOPPED_AT", "0"]]
+        self._obs(un_tramo(t0, "2066V70201C4") + un_tramo(t0 + 600, "2066V70203C4"))
+        historial.SESION = "manana"
+        a = persistencia.Almacen(token="TOKEN", repo="u/r")
+        self.assertTrue(a.guardar())
+        # reinicio: disco vacío, sesión nueva, se recupera lo guardado y se observa más ese mismo día
+        historial.HIST = tempfile.mkdtemp()
+        historial.SESION = "tarde"
+        b = persistencia.Almacen(token="TOKEN", repo="u/r")
+        self.assertTrue(b.cargar())
+        self._obs(un_tramo(t0 + 20000, "2066V70231C4"))
+        res = historial.resumen()
+        muestras = sum(len(v.get("A|B", [])) for v in res["tramos"].values())
+        self.assertEqual(muestras, 3)          # 2 de la mañana + 1 de la tarde
 
     def test_inactivo_sin_token(self):
         a = persistencia.Almacen(token="", repo="")

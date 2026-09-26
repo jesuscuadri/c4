@@ -30,7 +30,7 @@ CONFIG_DEFECTO = {
     "puerto": 8765,
     "intervalo_consulta_s": 20,         # recalcular al menos cada 20 s
     "intervalo_rapido_s": 3,            # preguntar a Renfe si hay datos nuevos cada 3 s
-    "margen_cruce_min": 0.5,            # desde que entra el tren contrario hasta que sale el que espera
+    "margen_cruce_min": 1.0,            # desde que entra el tren contrario hasta que sale el que espera
     "margen_seguimiento_min": 0.5,
     "usar_rotaciones": True,
     "vuelta_minima_min": 4,             # tiempo mínimo para dar la vuelta en cabecera
@@ -38,9 +38,10 @@ CONFIG_DEFECTO = {
     "parada_minima_min": 0.4,           # parada mínima cuando el tren va tarde y recorta
     "cruces": "fijos",                  # "fijos" | "dinamicos"
     "umbral_cambio_cruce_min": 8,
-    "estaciones_cruce_extra": [],
+    "estaciones_cruce_extra": ["Soto del Barco", "Regueral"],   # tienen vía de cruce aunque el horario casi no las use (visto 26/09)
+    "cruce_mover_si_espera_min": 8,    # si un cruce haría esperar más que esto, se adelanta al siguiente apartadero
     "estaciones_cruce_excluir": [],
-    "recuperacion": 0.0,                # fracción de marcha recuperable si va con retraso
+    "recuperacion": 0.1,                # con retraso va ~10 % más rápido que el horario (medido 25/09)
     "usar_tiempos_aprendidos": True,
     "usar_correccion_sesgo": True,      # aprende de los fallos: corrige sesgos por estación
     "usar_retraso_tipico": True,        # los trenes que aún no han salido llevan su retraso habitual
@@ -49,8 +50,10 @@ CONFIG_DEFECTO = {
     "gps_vel_kmh": 60,                  # velocidad normal en marcha (para no fiarse de la holgura del horario)
     "arranque_frenada_min": 0.6,        # lo que se pierde arrancando y frenando en cada tramo
     "mezcla_oficial": True,             # lejos (>5 min) se mezcla con horario+retraso: medido, reduce el error
-    "mezcla_peso_min": 0.6,
+    "mezcla_peso_min": 0.8,
+    "holgura_ratio": 2.0,               # si el horario da más del doble de lo que permite la vía, es holgura
     "gps_max_km": 0.4,                  # más lejos de la vía que esto: posición no fiable
+    "parada_real_min": 1.0,             # medido 25/09: con retraso, entre «entra» y «sale» pasa ~1 min o más
     "adelanto_llegada_min": 0.5,        # Renfe marca «parado» al entrar en la estación: llegada algo antes
     "parada_defecto_min": 1.5,          # parada real (de «entra» a «sale») si aún no se ha aprendido
     "sesgo_damp": 0.5,                  # cuánto se aplica del sesgo aprendido (0-1)
@@ -77,6 +80,14 @@ def cargar_config():
 def normaliza(s):
     s = unicodedata.normalize("NFD", s or "")
     return "".join(c for c in s if unicodedata.category(c) != "Mn").lower().strip()
+
+
+def hm_salida(minutos):
+    """Hora de salida redondeada hacia abajo (si sale a las 18:25:40, decir 18:26 haría perder el tren)."""
+    if minutos is None:
+        return "--:--"
+    m = int(math.floor(minutos + 1e-6))
+    return "%02d:%02d" % ((m // 60) % 24, m % 60)
 
 
 def hm(minutos):

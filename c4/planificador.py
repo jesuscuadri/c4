@@ -18,7 +18,7 @@ import urllib.parse
 import urllib.request
 
 from .emtusa import MIN_POR_PARADA, andar_min
-from .util import distancia_km, hm, normaliza
+from .util import distancia_km, hm, hm_salida, normaliza
 
 # umbrales (metros / minutos)
 ANDAR_DIRECTO_MAX = 1300     # si la estación está más cerca que esto, se va andando (sin bus)
@@ -354,7 +354,7 @@ def planificar(linea, res, bus, origen, destino, ahora, en_vivo=True):
         "tipo": "tren", "num": tren["num"], "linea": "C-4",
         "desde": linea.nombre[kb], "hasta": linea.nombre[ka],
         "sale": round(sale, 2), "llega": round(llega, 2),
-        "sale_hm": hm(sale), "llega_hm": hm(llega),
+        "sale_hm": hm_salida(sale), "llega_hm": hm(llega),
         "retraso": tren["retraso"], "destino": tren["destino"], "via": tren.get("via"),
         "espera_estacion": round(max(0.0, sale - (salir + t_acc)), 1),
         "motivos": [{"texto": m["texto"], "min": m["min"], "estacion": linea.nombre[m["k"]]}
@@ -368,7 +368,7 @@ def planificar(linea, res, bus, origen, destino, ahora, en_vivo=True):
     plan["etapas"] = etapas_acc + [etapa_tren] + etapas_sal
     plan["ok"] = True
     plan["sale"] = round(salir, 2)
-    plan["sale_hm"] = hm(salir)
+    plan["sale_hm"] = hm_salida(salir)
     plan["sale_en"] = round(max(0.0, salir - ahora), 1)
     plan["sale_estacion"] = round(sale, 2)
     plan["llega"] = round(llega + t_sal, 2)
@@ -382,9 +382,9 @@ def planificar(linea, res, bus, origen, destino, ahora, en_vivo=True):
         if tt["id"] == tren["id"] or s_ is None or s_ < listo_en_estacion - 0.1:
             continue
         l_ = tt["est_a"][f["jd"]]
-        alt.append({"num": tt["num"], "destino": tt["destino"], "sale": round(s_, 2), "sale_hm": hm(s_),
+        alt.append({"num": tt["num"], "destino": tt["destino"], "sale": round(s_, 2), "sale_hm": hm_salida(s_),
                     "llega": round(l_ + t_sal, 2), "llega_hm": hm(l_ + t_sal),
-                    "salir_hm": hm(s_ - t_acc - (MARGEN_ENLACE if etapas_acc else 1.0)) if solo_andando else None,
+                    "salir_hm": hm_salida(s_ - t_acc - (MARGEN_ENLACE if etapas_acc else 1.0)) if solo_andando else None,
                     "retraso": tt["retraso"], "con_datos": tt["con_datos"]})
         if len(alt) == 2:
             break

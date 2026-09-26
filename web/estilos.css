@@ -23,7 +23,7 @@ button,select,input{font:inherit;color:inherit}
 .chip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--bd);background:var(--panel);border-radius:99px;padding:4px 10px;font-size:12.5px;white-space:nowrap}
 .dot{width:8px;height:8px;border-radius:50%;background:var(--mut)}
 .chip.directo .dot{background:var(--ok);box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 25%,transparent);animation:lat 2s infinite}
-.chip.congelado .dot{background:var(--warn)}.chip.sin_conexion .dot{background:var(--bad)}
+.chip.congelado .dot,.chip.sin_posiciones .dot{background:var(--warn)}.chip.sin_conexion .dot{background:var(--bad)}
 @keyframes lat{50%{box-shadow:0 0 0 6px transparent}}
 .estado .corto{display:none}
 .reloj{font-weight:700;font-size:15px;color:var(--tx)}

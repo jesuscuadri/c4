@@ -158,6 +158,35 @@ class Linea:
             ks = [k for k in ks if k in self.apartaderos]
             if ks:
                 self.cruces.append((a, b, max(ks, key=lambda k: cuenta[k])))
+        # A veces el horario los hace coincidir ENTRE dos estaciones (p. ej. El Parador–Soto del Barco:
+        # uno sale de Soto a las 15:06 y el otro de El Parador a las 15:08). En vía única eso es
+        # imposible: uno espera al otro en el apartadero más cercano. Visto el 26/09: el 70315 esperó
+        # 11 min en Soto del Barco al 70252 y nadie (ni la app oficial) lo preveía.
+        ya = {(a.id, b.id) for a, b, _ in self.cruces}
+        for a in ida:
+            for b in vuelta:
+                if (a.id, b.id) in ya or a.sa[0] > b.sd[-1] or b.sa[0] > a.sd[-1]:
+                    continue
+                for k in range(len(self.est) - 1):
+                    if not all(x in v.pos for v in (a, b) for x in (k, k + 1)):
+                        continue
+                    ia = (a.sd[a.pos[k]], a.sa[a.pos[k + 1]])          # a va de k a k+1
+                    ib = (b.sd[b.pos[k + 1]], b.sa[b.pos[k]])          # b va de k+1 a k
+                    if not (ia[0] < ib[1] and ib[0] < ia[1]):
+                        continue
+                    # a espera en el apartadero de atrás (<= k) o b en el de delante (>= k+1)
+                    ka = max((x for x in self.apartaderos if x <= k and x in a.pos and x in b.pos), default=None)
+                    kb = min((x for x in self.apartaderos if x >= k + 1 and x in a.pos and x in b.pos), default=None)
+                    opciones = []
+                    if ka is not None:
+                        opciones.append((b.sa[b.pos[ka]] - a.sd[a.pos[ka]], ka))
+                    if kb is not None:
+                        opciones.append((a.sa[a.pos[kb]] - b.sd[b.pos[kb]], kb))
+                    # si el apartadero queda lejos, lo más probable es que ese tramo tenga doble vía
+                    # (el horario no lo haría así): entonces no se impone nada
+                    if opciones and min(opciones)[0] <= self.cfg.get("cruce_en_tramo_max_min", 5):
+                        self.cruces.append((a, b, min(opciones)[1]))
+                    break
         self.cuenta_cruces = cuenta
 
     def _ordenes_en_tramo(self):

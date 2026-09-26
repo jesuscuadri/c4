@@ -21,7 +21,9 @@ class Estimador:
         self.cruces_activos = []
         self.paradas = {}                          # {stop_id: min} duración real de cada parada (aprendida)
         self._gps_prev = {}                        # (tren, j) -> km máximo visto (evita retrocesos)
-        self._avance = {}                          # tren -> (nivel, posición, minuto) lo más avanzado visto
+        self._avance = {}
+        self._cruce_movido = {}                    # (tren, tren) -> apartadero al que se movió su cruce
+        self._ultimo = {}                          # tren -> (retraso, minuto, j0) del último dato en directo                          # tren -> (nivel, posición, minuto) lo más avanzado visto
 
     # ------------------------------------------------------------------ estado actual
     def _recorrido_teorico(self, v, j0, j1):
@@ -33,6 +35,13 @@ class Estimador:
         return t
 
     def _estado_inicial(self, v, rt, ahora):
+        e = self._estado_datos(v, rt, ahora)
+        if e["con_datos"] and not e["cancelado"]:
+            # último dato bueno de este tren: retraso, cuándo, dónde estaba y cuándo llegaba allí
+            self._ultimo[v.id] = (e["retraso"] or 0.0, ahora, e["j0"], e["llegada0"])
+        return e
+
+    def _estado_datos(self, v, rt, ahora):
         """Dónde está el tren ahora: próxima estación j0, hora de llegada a ella y retraso actual."""
         L = self.L
         p = rt.pos.get(v.id)
@@ -40,6 +49,8 @@ class Estimador:
         n = len(v.k)
         e = {"j0": 0, "llegada0": v.sa[0], "parado": False, "fin": False, "cancelado": False,
              "retraso": (u["retraso"] if u else 0.0), "situacion": "",
+             # el «retraso» de Renfe es lo que usa la app oficial (se guarda aparte para esa columna)
+             "retraso_renfe": (u["retraso"] if u else None),
              # Renfe a veces manda el viaje sin parada ni retraso: eso no es un dato en directo
              "con_datos": bool(p or (u and (u.get("stop") or u.get("cancelado")))),
              "fuente": "horario"}
@@ -57,7 +68,13 @@ class Estimador:
                     llegada = min(ahora, v.sa[0])
                 e.update(j0=j, llegada0=llegada, parado=True, fuente="posición",
                          situacion=("En " if j == 0 else "Parado en ") + nombre)
-                e["retraso"] = u["retraso"] if u else max(0.0, llegada - v.sa[j], ahora - v.sd[j])
+                if j == 0:
+                    # En la estación de origen el «retraso» de Renfe no vale: es un contador que sube
+                    # un minuto por minuto desde antes de la hora de salida (visto el 25/09: 70254 salió
+                    # con +1,4 y Renfe decía +7). Se usa el propio: cuánto pasa de su hora de salida.
+                    e["retraso"] = max(0.0, ahora - v.sd[0])
+                else:
+                    e["retraso"] = u["retraso"] if u else max(0.0, llegada - v.sa[j], ahora - v.sd[j])
                 if j == n - 1:
                     e.update(fin=True, situacion="Llegado a " + nombre)
                 return e
@@ -130,6 +147,26 @@ class Estimador:
         # anteriores), se cuenta con ese retraso en vez de suponerlo puntual.
         r = e["retraso"]
         tip = self.salidas.get(v.num, 0.0) if self.cfg.get("usar_retraso_tipico", True) else 0.0
+        # ¿Lo vimos hace poco? (Renfe a veces deja de mandar un tren unos minutos, o se cae el
+        # servicio entero, como el sábado 26/09 a mediodía). Entonces sigue con el último retraso
+        # conocido, que es mucho mejor que suponerlo en hora de repente.
+        ult = self._ultimo.get(v.id)
+        if ult and ahora - ult[1] <= self.cfg.get("recordar_retraso_min", 45):
+            r = max(r, ult[0])
+            tip = 0.0
+            e.update(retraso=r, fuente="último dato", ultimo_dato=round(ahora - ult[1]))
+            if v.sa[-1] + r < ahora - 2:
+                e.update(fin=True, j0=n - 1, situacion="Terminado")
+                return e
+            # Se parte de donde se le vio y se deja que la simulación lo haga avanzar: así respeta
+            # los cruces. (Antes se le hacía avanzar con el horario y, si estaba esperando un cruce,
+            # se «pasaba» el apartadero y el cruce se iba a otra estación. Visto el 25/09: 70226.)
+            j = min(ult[2], n - 1)
+            e.update(j0=j, llegada0=ult[3],
+                     situacion="Renfe no da su posición ahora · %s iba %s" % (
+                         "hace %d min" % round(ahora - ult[1]) if ahora - ult[1] >= 1 else "hace un momento",
+                         "con +%d min" % round(r) if r >= 1 else "en hora"))
+            return e
         if tip:
             e["tipico"] = tip
         if v.sd[0] + r + tip > ahora - 1:
@@ -261,15 +298,31 @@ class Estimador:
 
     def _recorrido(self, v, j, tarde):
         base = max(0.3, v.sa[j + 1] - v.sd[j])
+        capado = False
         if self._aprendido(v, j):
             clave = (self.L.est[v.k[j]], self.L.est[v.k[j + 1]])
             base = min(max(self.aprendidos[clave], base * 0.35), base * 1.8)
-        elif v.para[j + 1]:
+        else:
+            # Holgura del horario: hay tramos con muchísimo margen (Gijón→Tremañes: 6 min en el
+            # horario para 1,9 km que se hacen en 2). Si el horario da claramente más de lo que
+            # permite la vía, se cuenta lo que tarda de verdad; el tren luego espera en la estación
+            # a su hora de salida (nunca sale antes).
+            ratio = self.cfg.get("holgura_ratio", 0) or 0
+            vref = self.cfg.get("gps_vel_kmh", 0) or 0
+            if ratio and vref:
+                dist = abs(self.L.km[v.k[j + 1]] - self.L.km[v.k[j]])
+                af = self.cfg.get("arranque_frenada_min", 0.6) / 2
+                tec = dist / (vref / 60.0) + (af if v.para[j] else 0) + (af if v.para[j + 1] else 0)
+                if base > ratio * tec:
+                    base, capado = max(tec, 0.3), True
+        if not self._aprendido(v, j) and v.para[j + 1]:
             # Renfe da el tren por «parado» en cuanto entra en la estación (antes de detenerse del
             # todo) y por «en marcha» cuando ya ha salido: la llegada real es algo antes de lo que
             # sale de sumar la marcha del horario. Ese tiempo se pasa a la parada (ver _resolver).
             base -= self._adelanto_en(v, j)
-        if tarde and self.cfg["recuperacion"] > 0:
+        if tarde and self.cfg["recuperacion"] > 0 and not self._aprendido(v, j) and not capado:
+            # con retraso, el tren no aprovecha la holgura del horario: va más rápido de lo que dice
+            # (medido en directo). Si el tramo ya está aprendido, ese tiempo ya es el real.
             base *= 1 - self.cfg["recuperacion"]
         # corrección aprendida de los fallos: si en la estación de llegada solemos
         # equivocarnos siempre en el mismo sentido, ajustamos (amortiguado y acotado)
@@ -323,7 +376,13 @@ class Estimador:
                         # la parada programada ya va en el horario; si va tarde puede acortarla.
                         # Lo que se adelantó la llegada (ver _recorrido) se pasa parado.
                         parada = min(v.sd[j] - v.sa[j], pmin) + (self._adelanto_en(v, j - 1) if j > 0 else 0.0)
-                    base = max(v.sd[j], a + max(0.0, parada))
+                        if j > 0 and a > v.sa[j] + 0.5:
+                            # tren con retraso (no tiene margen del horario que absorba la parada):
+                            # medido en directo, entre «entra» y «sale» pasa como mínimo ~1 min; si ya se
+                            # ha aprendido lo que dura la parada en esta estación, se usa eso
+                            parada = max(parada, self.paradas.get(self.L.est[v.k[j]], self.cfg.get("parada_real_min", 0.0)))
+                    # nunca sale antes de su hora (y Renfe lo da por salido unos segundos después)
+                    base = max(v.sd[j] + (self.cfg.get("salida_tras_hora_min", 0.0) if j > 0 else 0.0), a + max(0.0, parada))
                     if j == e["j0"]:
                         base = max(base, ahora + (0.1 if e["parado"] else 0.0))
                         if j == 0 and e["retraso"] and e["con_datos"]:
@@ -406,7 +465,8 @@ class Estimador:
             if pa and pb:
                 continue
             elegido, info = k, "programado"
-            if pa != pb or cfg["cruces"] == "dinamicos":
+            largo = cfg.get("cruce_mover_si_espera_min", 8)
+            if pa != pb or cfg["cruces"] == "dinamicos" or largo:
                 cands = [c for c in sorted(L.apartaderos)
                          if c in a.pos and c in b.pos and not pasado(a, c) and not pasado(b, c)]
                 if not cands:
@@ -414,10 +474,26 @@ class Estimador:
                 coste = {c: abs(A0[a.id][a.pos[c]] - A0[b.id][b.pos[c]]) for c in cands}
                 if pa != pb:
                     elegido, info = min(cands, key=lambda c: coste[c]), "movido"
-                elif k in cands and coste[k] > cfg["umbral_cambio_cruce_min"]:
+                elif cfg["cruces"] == "dinamicos" and k in cands and coste[k] > cfg["umbral_cambio_cruce_min"]:
                     mejor = min(cands, key=lambda c: coste[c] + (0 if c == k else 1))
                     if coste[k] - coste[mejor] > 2:
                         elegido, info = mejor, "movido"
+                elif largo and k in cands and coste[k] > largo:
+                    # Con un retraso grande, el puesto de mando no deja al otro tren esperando un cuarto
+                    # de hora en el apartadero del horario: adelanta el cruce al siguiente apartadero
+                    # (visto el 26/09: el 70320 no esperó en Candás al 70315, que iba 20 min tarde; se
+                    # cruzaron en Regueral). Nunca en la cabecera de uno de los dos, y sin cambiar de
+                    # idea a cada momento (se mantiene el elegido mientras siga valiendo).
+                    extremos = {a.k[0], a.k[-1], b.k[0], b.k[-1]}
+                    buenos = [c for c in cands if c not in extremos]
+                    previo = self._cruce_movido.get((a.id, b.id))
+                    if buenos:
+                        mejor = min(buenos, key=lambda c: coste[c])
+                        if previo in buenos and coste[previo] - coste[mejor] <= 3:
+                            mejor = previo
+                        if coste[k] - coste[mejor] > 4:
+                            elegido, info = mejor, "movido"
+                            self._cruce_movido[(a.id, b.id)] = mejor
             poner_cruce(a, b, elegido, info, elegido == k)
             self.cruces_activos.append((a, b, elegido, info, k))
 
@@ -489,6 +565,7 @@ class Estimador:
                                 "con": otro.num})
             p = rt.pos.get(v.id)
             r = e["retraso"] or 0.0
+            r_adif = e["retraso_renfe"] if e.get("retraso_renfe") is not None else r   # lo que diría la app oficial
             j0 = e["j0"]
             if motivos and not self.cfg.get("mezcla_con_esperas", False):
                 est_a, est_d = A[v.id], D[v.id]     # espera explicada (cruce, vía única...): manda la simulación
@@ -501,14 +578,15 @@ class Estimador:
                 "j0": j0, "parado": e["parado"], "con_datos": e["con_datos"], "fuente": e["fuente"],
                 "retraso": round(r, 1),
                 "tipico": round(e.get("tipico", 0.0), 1),
+                "ultimo_dato": e.get("ultimo_dato"),
                 "km_gps": e.get("km_gps"), "t_gps": round(e["t_gps"], 3) if e.get("t_gps") else None,
                 "k": v.k, "para": v.para,
                 "prog_a": [round(x, 2) for x in v.sa], "prog_d": [round(x, 2) for x in v.sd],
                 "est_a": [None if x is None else round(x, 3) for x in est_a],
                 "est_d": [None if x is None else round(x, 3) for x in est_d],
                 # lo que calcularía la app oficial: horario + retraso actual, igual en todo el recorrido
-                "adif_a": [round(x + r, 2) for x in v.sa],
-                "adif_d": [round(x + r, 2) for x in v.sd],
+                "adif_a": [round(x + r_adif, 2) for x in v.sa],
+                "adif_d": [round(x + r_adif, 2) for x in v.sd],
                 "motivos": motivos,
                 "via": p.get("via") if p else None,
             })
