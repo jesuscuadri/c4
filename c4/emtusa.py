@@ -368,8 +368,13 @@ class Emtusa:
             sig = self.paradas_d[ids[sig_n]] if sig_n < len(ids) else None
             v["en_parada"] = {"id": en["id"], "nombre": en["nombre"]} if en else None
             v["proxima"] = {"id": sig["id"], "nombre": sig["nombre"]} if sig else None
-            if h["hdg"] is None:
-                h["hdg"] = rumbo_via                      # recién visto: el sentido de su recorrido
+            # El rumbo es el de la calle por la que va (su recorrido), no el de comparar dos posiciones
+            # de EMTUSA: llegan cada ~30 s y en medio el bus gira esquinas o el GPS salta unos metros
+            # (visto el 26/09: un 18 por la avenida con la flecha apuntando a los edificios).
+            if dist < 0.04:
+                h["hdg"] = rumbo_via
+            elif h["hdg"] is None:
+                h["hdg"] = rumbo_via
             # Velocidad a lo largo del recorrido (para que el mapa lo mueva entre dos lecturas)
             acc = t["_acc"]
             s_km = acc[seg] + frac * (acc[seg + 1] - acc[seg])

@@ -68,18 +68,33 @@ function textoSobre(c) {
 const INTERVALO_BUS = 5000;
 let animando = false, ultFrame = 0;
 function km(a, b) { const dx = (b[1] - a[1]) * 80.8, dy = (b[0] - a[0]) * 111.2; return Math.hypot(dx, dy); }
+function rumboDe(a, b) {
+  const y = (b[1] - a[1]) * Math.cos(a[0] * Math.PI / 180), x = b[0] - a[0];
+  return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+}
+/* dónde debería estar ahora y hacia dónde mira (el sentido de la calle por la que avanza) */
 function objetivo(b, t) {
   const v = b.v;
-  if (!v.vel || !v.camino || v.camino.length < 2) return [v.lat, v.lon];
+  if (!v.vel || !v.camino || v.camino.length < 2) { b.rumboVivo = null; return [v.lat, v.lon]; }
   const edad = Math.min(45, (v.quieto_s || 0) + (t - b.tv) / 1000);
   let d = v.vel * edad / 60;                             // km recorridos desde la última lectura
   let p = [v.lat, v.lon];
-  for (let i = 1; i < v.camino.length && d > 0; i++) {
+  for (let i = 1; i < v.camino.length; i++) {
     const q = v.camino[i], l = km(p, q);
-    if (l >= d) { const f = d / l; return [p[0] + (q[0] - p[0]) * f, p[1] + (q[1] - p[1]) * f]; }
+    if (l < 0.002) { p = q; continue; }
+    if (l >= d) { b.rumboVivo = rumboDe(p, q); const f = d / l; return [p[0] + (q[0] - p[0]) * f, p[1] + (q[1] - p[1]) * f]; }
     d -= l; p = q;
   }
   return p;
+}
+function girar(b) {
+  const r = b.rumboVivo != null ? b.rumboVivo : b.v.rumbo;
+  if (r == null || !b.m._icon) return;
+  if (b.rumboPintado != null && Math.abs(((r - b.rumboPintado + 540) % 360) - 180) < 8) return;
+  b.rumboPintado = r;
+  const fl = b.m._icon.querySelector(".bm-fl");
+  if (fl) fl.style.transform = `translate(-50%,-50%) rotate(${r}deg) translateY(-16px)`;
+  const bm = b.m._icon.querySelector(".bm"); if (bm) bm.classList.remove("sin-rumbo");
 }
 function animarBuses() {
   if (animando) return;
@@ -93,6 +108,7 @@ function animarBuses() {
       for (const key in busMarks) {
         const b = busMarks[key];
         const o = objetivo(b, t);
+        girar(b);
         const salto = Math.abs(o[0] - b.cur[0]) + Math.abs(o[1] - b.cur[1]);
         if (salto < 2e-7) continue;
         b.cur = salto > 0.006 ? o : [b.cur[0] + (o[0] - b.cur[0]) * k, b.cur[1] + (o[1] - b.cur[1]) * k];
@@ -143,8 +159,8 @@ async function tickBuses() {
       b.firma = firma;
       const fl = b.m._icon && b.m._icon.querySelector(".bm-fl"), bm = b.m._icon && b.m._icon.querySelector(".bm");
       if (bm) {
-        if (v.rumbo != null) fl.style.transform = `translate(-50%,-50%) rotate(${v.rumbo}deg) translateY(-16px)`;
-        bm.classList.toggle("sin-rumbo", v.rumbo == null);
+        b.rumboPintado = null; girar(b);
+        bm.classList.toggle("sin-rumbo", v.rumbo == null && b.rumboVivo == null);
         bm.classList.toggle("quieto", v.quieto_s > 150);
       } else b.m.setIcon(iconoBus(v));
     }
