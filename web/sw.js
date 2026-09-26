@@ -2,7 +2,7 @@
    - Páginas y estilos: se piden a la red; si tarda más de 3 s, se usa la copia guardada.
    - Datos (/api/estado, /api/linea): igual, con 8 s; la app avisa si son datos antiguos.
    - Mapa (Leaflet): se guarda la primera vez. Las teselas del mapa no se guardan. */
-const VERSION = "c4-v22";
+const VERSION = "c4-v23";
 const BASICOS = ["/", "/index.html", "/app.js", "/estilos.css", "/manifest.json", "/icono-180.png", "/icono-192.png"];
 
 self.addEventListener("install", (e) => {

@@ -341,16 +341,21 @@ function kmTren(t, now) {
   for (let j = Math.max(0, t.j0 - 1); j < n; j++) {
     const a = t.est_a[j], d = t.est_d[j];
     if (a == null) continue;
-    if (j >= t.j0 && now < a) {
+    // En marcha hacia su próxima estación (dato en directo): no se le hace llegar hasta que Renfe diga
+    // que ha llegado. Si va más lento de lo calculado, se queda «entrando» en vez de plantarse en el
+    // andén y volver atrás cuando llega el dato siguiente.
+    const enMarcha = j === t.j0 && !t.parado && t.con_datos;
+    if ((j >= t.j0 && now < a) || enMarcha) {
       if (j === 0) return t.con_datos ? km(0) : null;
+      const tope = enMarcha ? 0.96 : 1;
       if (j === t.j0 && t.km_gps != null && t.t_gps != null && a > t.t_gps) {
         // posición GPS real del tren, avanzando hacia la estación a su ritmo hasta la llegada
-        const f = Math.min(1, Math.max(0, (now - t.t_gps) / (a - t.t_gps)));
+        const f = Math.min(tope, Math.max(0, (now - t.t_gps) / (a - t.t_gps)));
         return t.km_gps + (km(j) - t.km_gps) * f;
       }
       const d0 = t.est_d[j - 1];
-      if (d0 == null || a <= d0) return km(j);
-      const f = Math.min(1, Math.max(0, (now - d0) / (a - d0)));
+      if (d0 == null || a <= d0) return km(j - 1) + (km(j) - km(j - 1)) * tope;
+      const f = Math.min(tope, Math.max(0, (now - d0) / (a - d0)));
       return km(j - 1) + (km(j) - km(j - 1)) * f;
     }
     if (d != null && now <= d) return km(j);
@@ -694,22 +699,34 @@ function pintarTrenesMapa() {
 }
 
 /* ---------------------------------------------------------------- movimiento fluido
-   Los datos llegan cada pocos segundos, pero los trenes se dibujan ~30 veces por segundo en su
-   posición calculada para ese instante. Cuando llega un dato nuevo que corrige la posición, el tren
-   no salta: se desliza hasta ella en menos de un segundo. */
-const SUAVE = {};   // id -> {x (km mostrado), t (ms)}
+   Los datos de Renfe llegan cada 20 s, pero los trenes se dibujan ~30 veces por segundo en su
+   posición calculada para ese instante. Para que se vea como un tren de verdad:
+   - nunca va marcha atrás: si el dato nuevo lo deja por detrás, se queda quieto hasta que la
+     posición calculada lo alcanza (solo si se ha adelantado mucho y durante mucho rato, se recoloca);
+   - no pasa de ~86 km/h (la C-4 no va más rápido); si un dato nuevo lo pone kilómetros por
+     delante (pasa pocas veces), se recoloca en vez de cruzar el mapa a toda velocidad.
+   (Medido con las grabaciones del 25-26/09: antes retrocedía cientos de veces, hasta 4 km de golpe,
+   y se movía a más de 100 km/h durante minutos; así, casi nunca.) */
+const SUAVE = {};   // id -> {x (km mostrado), t (ms), atras (s que lleva por delante del dato)}
+const VMAX_KM_S = 0.024;
 function posSuave(t, now, tnow) {
   const obj = kmTren(t, now);
   if (obj == null) { delete SUAVE[t.id]; return null; }
   const s = SUAVE[t.id];
-  if (!s || Math.abs(obj - s.x) > 2.5) { SUAVE[t.id] = { x: obj, t: tnow }; return obj; }  // lejos: se coloca sin más
+  // muy lejos (un dato nuevo lo sitúa kilómetros más adelante): se coloca, sin correr a 200 km/h
+  if (!s || (obj - s.x) * t.dir > 2.5 || Math.abs(obj - s.x) > 5) { SUAVE[t.id] = { x: obj, t: tnow, atras: 0 }; return obj; }
   const dt = Math.max(0, Math.min(1000, tnow - s.t)) / 1000;
   s.t = tnow;
-  const dif = obj - s.x;
-  // si el dato nuevo lo deja un poco por detrás, el tren no retrocede: espera a que la posición real
-  // lo alcance (un tren nunca va marcha atrás). Si la corrección es grande, se desliza hasta ella.
-  if (dif * t.dir < 0 && Math.abs(dif) < 0.25) return s.x;
-  s.x += dif * (1 - Math.exp(-dt / 0.9));
+  const dif = (obj - s.x) * t.dir;            // > 0: el tren tiene que avanzar
+  if (dif >= 0) {
+    s.atras = 0;
+    // sigue al objetivo con suavidad y nunca más rápido que un tren de verdad
+    const paso = Math.min(dif, dif * (1 - Math.exp(-dt / 2)) + 0.002 * dt, VMAX_KM_S * dt);
+    s.x += paso * t.dir;
+  } else {
+    s.atras += dt;                            // por delante del dato: espera quieto
+    if (-dif > 1 && s.atras > 40) { s.x = obj; s.atras = 0; }
+  }
   return s.x;
 }
 function girar(m, ang) {
