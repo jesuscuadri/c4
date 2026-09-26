@@ -17,6 +17,7 @@ Dos fuentes de datos, separadas a propósito:
 Todo con biblioteca estándar. Si la API de tiempo real no responde, la red sigue
 disponible: se ven líneas, paradas y se puede planificar; solo faltan los minutos.
 """
+import bisect
 import json
 import os
 import threading
@@ -81,6 +82,7 @@ class Emtusa:
                                         "nombre": _limpia(p[2]), "lineas": []}
         self.trayectos = []
         self.por_parada = {}
+        formas = net.get("formas", {})
         for t in net["trayectos"]:
             idlinea, idtray, direccion, destino, seq = t
             info = self.lineas_d.get(str(idlinea), {})
@@ -93,10 +95,20 @@ class Emtusa:
                 pd = self.paradas_d.get(sid)
                 if pd and info.get("codigo") and info["codigo"] not in pd["lineas"]:
                     pd["lineas"].append(info["codigo"])
-            # geometría (parada a parada) para situar cada bus sobre su recorrido
-            pts = [(self.paradas_d[p]["lat"], self.paradas_d[p]["lon"]) for p in seq if p in self.paradas_d]
+            # Geometría para dibujar la línea y situar cada bus: el trazado por las calles (calculado
+            # sobre OpenStreetMap, ver «formas» en red_emtusa.json) o, si no lo hay, parada a parada.
+            ids = [p for p in seq if p in self.paradas_d]
+            f = formas.get(str(idx))
+            if f and len(ids) == len(seq) and len(f[1]) == len(seq):
+                pts, ip = _decodifica(f[0]), list(f[1])
+                self.trayectos[-1]["forma"] = f[0]
+                self.trayectos[-1]["forma_raw"] = f
+            else:
+                pts = [(self.paradas_d[p]["lat"], self.paradas_d[p]["lon"]) for p in ids]
+                ip = list(range(len(pts)))
             self.trayectos[-1]["_pts"] = pts
-            self.trayectos[-1]["_ids"] = [p for p in seq if p in self.paradas_d]
+            self.trayectos[-1]["_ip"] = ip                  # posición de cada parada dentro de _pts
+            self.trayectos[-1]["_ids"] = ids
             acc = [0.0]
             for a, b in zip(pts, pts[1:]):
                 acc.append(acc[-1] + distancia_km(a, b))
@@ -136,6 +148,13 @@ class Emtusa:
                 net["trayectos"].append([int(lid), t["idtrayecto"], t.get("direccion"),
                                          _limpia(t.get("destino")), seq])
         if guardar and net["trayectos"]:
+            # los trazados por calle se conservan para los recorridos con las mismas paradas
+            viejos = {tuple(t["paradas"]): t.get("forma_raw") for t in self.trayectos if t.get("forma_raw")}
+            net["formas"] = {}
+            for k, t in enumerate(net["trayectos"]):
+                fr = viejos.get(tuple(t[4]))
+                if fr:
+                    net["formas"][str(k)] = fr
             os.makedirs(os.path.dirname(RED_PATH), exist_ok=True)
             with open(RED_PATH, "w", encoding="utf-8") as f:
                 json.dump(net, f, ensure_ascii=False, separators=(",", ":"))
@@ -155,7 +174,7 @@ class Emtusa:
             "paradas": list(self.paradas_d.values()),
             "trayectos": {str(i): {"linea": t["linea"], "codigo": t["codigo"], "color": t["color"],
                                    "destino": t["destino"], "direccion": t["direccion"],
-                                   "paradas": t["paradas"]}
+                                   "paradas": t["paradas"], "forma": t.get("forma")}
                           for i, t in enumerate(self.trayectos)},
         }
 
@@ -334,15 +353,19 @@ class Emtusa:
             _, i, (seg, dist, frac, rumbo_via) = mejor
             h["tray"] = i
             t = self.trayectos[i]
-            ids = t["_ids"]
+            ids, ip = t["_ids"], t["_ip"]
+            # entre qué dos paradas está (seg es el tramo del trazado; ip dice dónde cae cada parada)
+            n = bisect.bisect_right(ip, seg) - 1
+            n = max(0, min(n, len(ids) - 2))
             # en la parada (a menos de ~35 m) o camino de la siguiente
-            p_a, p_b = self.paradas_d[ids[seg]], self.paradas_d[ids[seg + 1]]
+            p_a, p_b = self.paradas_d[ids[n]], self.paradas_d[ids[n + 1]]
             en = None
             if distancia_km(pos, (p_a["lat"], p_a["lon"])) < 0.035:
                 en = p_a
             elif distancia_km(pos, (p_b["lat"], p_b["lon"])) < 0.035:
                 en = p_b
-            sig = p_b if en is not p_b else (self.paradas_d[ids[seg + 2]] if seg + 2 < len(ids) else None)
+            sig_n = n + 1 if en is not p_b else n + 2
+            sig = self.paradas_d[ids[sig_n]] if sig_n < len(ids) else None
             v["en_parada"] = {"id": en["id"], "nombre": en["nombre"]} if en else None
             v["proxima"] = {"id": sig["id"], "nombre": sig["nombre"]} if sig else None
             if h["hdg"] is None:
@@ -360,11 +383,11 @@ class Emtusa:
                 h["s"], h["t_s"], h["tray_s"] = s_km, ahora, i
             # camino hasta la parada siguiente a la próxima: en 30 s rara vez pasa de ahí (la velocidad
             # media ya incluye lo que pierde en paradas y semáforos)
-            fin = min(ids.index(sig["id"], seg + 1) + 1, len(ids) - 1) if sig else seg + 1
+            fin = ip[min(sig_n + 1, len(ids) - 1)] if sig else seg + 1
             px = (t["_pts"][seg][0] + (t["_pts"][seg + 1][0] - t["_pts"][seg][0]) * frac,
                   t["_pts"][seg][1] + (t["_pts"][seg + 1][1] - t["_pts"][seg][1]) * frac)
             v["camino"] = [[round(px[0], 6), round(px[1], 6)]] + [
-                [round(q[0], 6), round(q[1], 6)] for q in t["_pts"][seg + 1:fin + 1]]
+                [round(q[0], 6), round(q[1], 6)] for q in t["_pts"][seg + 1:max(fin, seg + 1) + 1]]
         quieto = int(ahora - h["t_cambio"])
         v["rumbo"] = None if h["hdg"] is None else round(h["hdg"])
         v["quieto_s"] = quieto
@@ -446,6 +469,28 @@ def _proyectar(pts, p):
         return None
     i = mejor[0]
     return mejor[0], mejor[1], mejor[2], _rumbo(pts[i], pts[i + 1])
+
+
+def _decodifica(p):
+    """Polilínea codificada (formato de Google, 5 decimales) -> [(lat, lon)]."""
+    pts, i, la, lo = [], 0, 0, 0
+    while i < len(p):
+        for k in range(2):
+            sh = r = 0
+            while True:
+                b = ord(p[i]) - 63
+                i += 1
+                r |= (b & 0x1f) << sh
+                sh += 5
+                if b < 0x20:
+                    break
+            d = ~(r >> 1) if r & 1 else r >> 1
+            if k == 0:
+                la += d
+            else:
+                lo += d
+        pts.append((la / 1e5, lo / 1e5))
+    return pts
 
 
 def _hoy_iso():

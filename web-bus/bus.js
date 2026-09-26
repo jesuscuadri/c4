@@ -458,7 +458,24 @@ function pintarChipsLineas(cuenta) {
     }).join("");
   if (cont._html !== html) { cont.innerHTML = html; cont._html = html; }
 }
-function trazaTrayecto(t) { return t.paradas.map((pid) => PARADAS[pid]).filter(Boolean).map((p) => [p.lat, p.lon]); }
+/* trazado por las calles (polilínea codificada); si no lo hay, de parada a parada */
+function decodifica(p) {
+  const pts = []; let i = 0, la = 0, lo = 0;
+  while (i < p.length) {
+    for (let k = 0; k < 2; k++) {
+      let sh = 0, r = 0, b;
+      do { b = p.charCodeAt(i++) - 63; r |= (b & 0x1f) << sh; sh += 5; } while (b >= 0x20);
+      const d = r & 1 ? ~(r >> 1) : r >> 1;
+      if (k === 0) la += d; else lo += d;
+    }
+    pts.push([la / 1e5, lo / 1e5]);
+  }
+  return pts;
+}
+function trazaTrayecto(t) {
+  if (t.forma) return t._geo || (t._geo = decodifica(t.forma));
+  return t.paradas.map((pid) => PARADAS[pid]).filter(Boolean).map((p) => [p.lat, p.lon]);
+}
 function setFiltroLinea(codigo) {
   filtroLinea = codigo;
   $("mapa-linea").value = codigo;
@@ -470,8 +487,8 @@ function setFiltroLinea(codigo) {
     for (const t of Object.values(TRAYECTOS).filter((x) => x.linea === l.id)) {
       const traza = trazaTrayecto(t);
       if (traza.length > 1) {
-        L.polyline(traza, { color: osc ? "#0b0b0e" : "#fff", weight: 9, opacity: .8, interactive: false, lineJoin: "round", lineCap: "round" }).addTo(capaRuta);
-        L.polyline(traza, { color: col, weight: 5, opacity: 1, interactive: false, lineJoin: "round", lineCap: "round" }).addTo(capaRuta);
+        L.polyline(traza, { color: osc ? "#0b0b0e" : "#fff", weight: 7, opacity: .75, interactive: false, lineJoin: "round", lineCap: "round", smoothFactor: 0.5 }).addTo(capaRuta);
+        L.polyline(traza, { color: col, weight: 4, opacity: .95, interactive: false, lineJoin: "round", lineCap: "round", smoothFactor: 0.5 }).addTo(capaRuta);
         pts = pts.concat(traza);
       }
       t.paradas.forEach((pid) => usadas.add(pid));

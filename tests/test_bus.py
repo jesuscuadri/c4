@@ -19,15 +19,17 @@ class TestBus(unittest.TestCase):
 
     def test_situar_en_su_recorrido(self):
         t = self._tray(1)
-        a, b = t["_pts"][4], t["_pts"][5]
+        k = t["_ip"][4]                              # tramo del trazado que sale de la 5ª parada
+        a, b = t["_pts"][k], t["_pts"][k + 1]
         v = {"bus": "900", "linea": "1", "linea_id": 1, "destino": t["destino"],
-             "lat": a[0] + (b[0] - a[0]) * 0.3, "lon": a[1] + (b[1] - a[1]) * 0.3}
+             "lat": a[0] + (b[0] - a[0]) * 0.5, "lon": a[1] + (b[1] - a[1]) * 0.5}
         self.e._situar(v, 1000.0)
         self.assertEqual(v["proxima"]["id"], t["_ids"][5])
         self.assertIsNotNone(v["rumbo"])            # sentido del recorrido aunque aún no se haya movido
         self.assertEqual(v["vel"], 0.0)             # sin dos lecturas no hay velocidad
         # 30 s después está un poco más adelante: ya hay velocidad y camino para seguir moviéndolo
-        v2 = dict(v, lat=a[0] + (b[0] - a[0]) * 0.8, lon=a[1] + (b[1] - a[1]) * 0.8)
+        c = t["_pts"][k + 2] if t["_ip"][5] > k + 1 else b
+        v2 = dict(v, lat=(b[0] + c[0]) / 2, lon=(b[1] + c[1]) / 2)
         self.e._situar(v2, 1030.0)
         self.assertGreater(v2["vel"], 0)
         self.assertGreaterEqual(len(v2["camino"]), 2)
@@ -37,6 +39,17 @@ class TestBus(unittest.TestCase):
         self.e._situar(v3, 1080.0)
         self.assertEqual(v3["vel"], 0.0)
         self.assertEqual(v3["quieto_s"], 50)
+
+    def test_trazado_por_calles(self):
+        # cada recorrido tiene su trazado por las calles y cada parada cae sobre él
+        from c4.util import distancia_km
+        con = [t for t in self.e.trayectos if t.get("forma")]
+        self.assertGreater(len(con), 0.9 * len(self.e.trayectos))
+        for t in con:
+            self.assertEqual(len(t["_ip"]), len(t["_ids"]))
+            for sid, i in zip(t["_ids"], t["_ip"]):
+                p = self.e.paradas_d[sid]
+                self.assertLess(distancia_km((p["lat"], p["lon"]), t["_pts"][i]), 0.08)
 
     def test_nombres(self):
         self.assertEqual(_limpia("MUSEL-HOSPITAL DE JOVE-POL. PORCEYO Y ZARRACINA"),
