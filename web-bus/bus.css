@@ -105,8 +105,6 @@ select{margin-bottom:12px}
 .lg-bus{width:16px;height:16px;border-radius:50%;background:var(--ac);box-shadow:0 0 0 2px var(--panel),0 1px 3px rgba(0,0,0,.4)}
 .lg-parada{width:11px;height:11px;border-radius:50%;background:#fff;border:2.5px solid var(--ac)}
 /* marcador de autobús en movimiento */
-.bus-marca{transition:transform .9s linear}
-.sin-anim .bus-marca{transition:none}
 .bm{position:relative;width:28px;height:28px}
 .bm-l{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);min-width:22px;height:22px;padding:0 4px;border-radius:11px;color:#fff;font-weight:800;font-size:11px;display:grid;place-items:center;box-shadow:0 0 0 2px var(--panel),0 1px 4px rgba(0,0,0,.45);white-space:nowrap}
 .bm-fl{position:absolute;left:50%;top:50%;width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-bottom:9px solid var(--ac);filter:drop-shadow(0 0 1px var(--panel))}
@@ -147,9 +145,11 @@ select{margin-bottom:12px}
 .vivo-pill:empty{display:none}
 .vp-x{border:0;background:var(--panel2);color:var(--tx);border-radius:7px;width:22px;height:22px;cursor:pointer;font-size:15px;line-height:1;margin-left:2px}
 /* buses con el mapa alejado: solo un punto de su color con una flecha pequeña */
-.lejos .bm-l{min-width:13px;width:13px;height:13px;padding:0;font-size:0;box-shadow:0 0 0 1.5px var(--panel),0 1px 3px rgba(0,0,0,.5)}
-.lejos .bm-fl{border-left-width:3.5px;border-right-width:3.5px;border-bottom-width:6px;transform-origin:50% 50%}
-.lejos .bm-fl{margin-top:5px}
+.lejos .bm-l{min-width:18px;height:18px;padding:0 3px;font-size:9.5px;border-radius:9px;box-shadow:0 0 0 1.5px var(--panel),0 1px 3px rgba(0,0,0,.5)}
+.lejos .bm-fl{border-left-width:4px;border-right-width:4px;border-bottom-width:7px;margin-top:3px}
+.muy-lejos .bm-l{min-width:12px;width:12px;height:12px;padding:0;font-size:0}
+.muy-lejos .bm-fl{display:none}
+.bm.quieto .bm-l{opacity:.75}
 .lg-bus{background:linear-gradient(135deg,#169CD8 50%,#FBBA13 50%)}
 .lg-parada{background:#fff;border:1.5px solid #6b6b75;width:9px;height:9px}
 .leaflet-control-attribution{font-size:10px!important}
@@ -162,3 +162,23 @@ select{margin-bottom:12px}
 
 .h-corto{display:none}
 @media (max-width:600px){.h-largo,.marca small{display:none}.h-corto{display:inline}}
+
+/* llegadas agrupadas (línea + destino) */
+.lleg{cursor:pointer}
+.lleg .destino small{display:block;color:var(--mut);font-size:12px;font-weight:500}
+.lleg .min{text-align:right;line-height:1.1}
+.lleg .min em{display:block;font-style:normal;font-weight:500;font-size:11.5px;color:var(--mut)}
+.llegadas.mini{margin-top:8px;gap:5px}
+.llegadas.mini .lleg .min{font-size:15px}
+.llegadas.mini .lleg .destino{font-size:13.5px}
+.mini-sin{color:var(--mut);font-size:13px;margin-top:8px}
+.linea-desc small{display:block;color:var(--mut);font-size:11.5px;margin-top:2px}
+.linea-card.sin-buses{opacity:.55}
+.pop-donde{font-size:13px;margin:2px 0 4px}
+.pop-quieto{font-size:12.5px;color:var(--warn);margin-bottom:4px}
+.pop-btns{display:grid;gap:6px}
+.parada-foco{width:26px;height:26px;border-radius:50%;border:3px solid var(--ac);background:color-mix(in srgb,var(--ac) 25%,transparent);animation:foco 1.4s ease-out infinite}
+@keyframes foco{0%{transform:scale(.6);opacity:1}100%{transform:scale(1.6);opacity:0}}
+.parada-sentido{display:block;color:var(--mut);font-size:12.5px;font-weight:500;margin-top:2px}
+.hoja-cab h3 .parada-sentido{font-size:13px}
+.lleg .min em{min-height:1em}

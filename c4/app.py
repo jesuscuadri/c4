@@ -322,6 +322,13 @@ def servir(app, abrir=True, en_red=False, publico=False):
                     return self._json({"paradas": app.bus.cercanas(float(q["lat"][0]), float(q["lon"][0]))})
                 except Exception as e:  # noqa: BLE001
                     return self._json({"error": str(e), "paradas": []})
+            if ruta == "/api/bus/llegadas":
+                # varias paradas a la vez (favoritas, cerca de mí): ?ids=51,76
+                q = parse_qs(urlparse(self.path).query)
+                ids = [x for x in q.get("ids", [""])[0].split(",") if x.strip().isdigit()]
+                if not app.bus:
+                    return self._json({"paradas": {}})
+                return self._json({"paradas": app.bus.llegadas_de(ids), "disponible": app.bus.disponible})
             if ruta == "/api/bus/buscar":
                 q = parse_qs(urlparse(self.path).query)
                 return self._json({"paradas": app.bus.buscar_paradas(q.get("q", [""])[0]) if app.bus else []})

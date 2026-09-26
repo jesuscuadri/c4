@@ -51,6 +51,8 @@ class Emtusa:
         self.error = None
         self._veh = None
         self._veh_ts = 0
+        self._hist = {}             # bus -> {"pos", "t_cambio", "hdg", "tray"}: para rumbo, «parado» y próxima parada
+        self._lleg_cache = {}       # parada -> (ts, respuesta): muchos móviles miran la misma parada
         self.red_generada = None
         # red (estructura fija en disco)
         self.paradas_d = {}         # id(int) -> {id, nombre, lat, lon, lineas:[codigos]}
@@ -72,7 +74,7 @@ class Emtusa:
         for lid, l in net["lineas"].items():
             color = l.get("color") or "888888"
             self.lineas_d[str(lid)] = {"id": int(lid), "codigo": l.get("codigo") or str(lid),
-                                       "color": "#" + color.lstrip("#"), "nombre": l.get("desc") or ""}
+                                       "color": "#" + color.lstrip("#"), "nombre": _limpia(l.get("desc") or "")}
         self.paradas_d = {}
         for pid, p in net["paradas"].items():
             self.paradas_d[int(pid)] = {"id": int(pid), "lat": p[0], "lon": p[1],
@@ -91,6 +93,14 @@ class Emtusa:
                 pd = self.paradas_d.get(sid)
                 if pd and info.get("codigo") and info["codigo"] not in pd["lineas"]:
                     pd["lineas"].append(info["codigo"])
+            # geometría (parada a parada) para situar cada bus sobre su recorrido
+            pts = [(self.paradas_d[p]["lat"], self.paradas_d[p]["lon"]) for p in seq if p in self.paradas_d]
+            self.trayectos[-1]["_pts"] = pts
+            self.trayectos[-1]["_ids"] = [p for p in seq if p in self.paradas_d]
+            acc = [0.0]
+            for a, b in zip(pts, pts[1:]):
+                acc.append(acc[-1] + distancia_km(a, b))
+            self.trayectos[-1]["_acc"] = acc
 
     @property
     def red_ok(self):
@@ -204,6 +214,9 @@ class Emtusa:
         if not self.activo:
             return {"id": id_parada, "error": "bus desactivado", "llegadas": []}
         base = self.paradas_d.get(int(id_parada)) if str(id_parada).isdigit() else None
+        c = self._lleg_cache.get(str(id_parada))
+        if c and time.time() - c[0] < 10:
+            return c[1]
         try:
             j = self._get("paradas/parada/%s" % id_parada)
             lls = []
@@ -219,10 +232,14 @@ class Emtusa:
                             "actualizado": x.get("horaActualizacion")})
             lls.sort(key=lambda l: (l["minutos"] is None, l["minutos"]))
             self.disponible, self.error = True, None
-            return {"id": id_parada, "nombre": _limpia(j.get("descripcion", "")) or (base or {}).get("nombre"),
-                    "lat": float(j["latitud"]) if j.get("latitud") else (base or {}).get("lat"),
-                    "lon": float(j["longitud"]) if j.get("longitud") else (base or {}).get("lon"),
-                    "llegadas": lls}
+            res = {"id": id_parada, "nombre": _limpia(j.get("descripcion", "")) or (base or {}).get("nombre"),
+                   "lat": float(j["latitud"]) if j.get("latitud") else (base or {}).get("lat"),
+                   "lon": float(j["longitud"]) if j.get("longitud") else (base or {}).get("lon"),
+                   "ts": int(time.time()), "llegadas": lls}
+            self._lleg_cache[str(id_parada)] = (time.time(), res)
+            if len(self._lleg_cache) > 600:
+                self._lleg_cache.clear()
+            return res
         except Exception as e:  # noqa: BLE001
             self.disponible, self.error = False, str(e)
             return {"id": id_parada, "nombre": (base or {}).get("nombre"), "error": str(e), "llegadas": []}
@@ -244,26 +261,36 @@ class Emtusa:
         """Todos los autobuses en circulación ahora mismo, con su posición (para el mapa en vivo).
 
         Fuente: autobuses/coordenadas de EMTUSA. Se cachea unos segundos porque muchos
-        navegadores pueden pedirlo a la vez."""
+        navegadores pueden pedirlo a la vez. Además de la posición se calcula, con el
+        recorrido de su línea: hacia dónde va (rumbo), cuál es su próxima parada y si
+        lleva un rato sin moverse (EMTUSA solo da la coordenada)."""
         if not self.activo:
             return {"disponible": False, "vehiculos": []}
         with self.lock:
-            if self._veh is not None and time.time() - self._veh_ts < 6:
+            if self._veh is not None and time.time() - self._veh_ts < 4:
                 return self._veh
         try:
             arr = self._get("autobuses/coordenadas")
+            ahora = time.time()
             out = []
+            vistos = set()
             for b in arr:
                 lat, lon = b.get("latitud"), b.get("longitud")
                 if lat is None or lon is None:
                     continue
-                out.append({"bus": str(b.get("numBus") or ""), "linea": b.get("codigo") or str(b.get("idlinea")),
-                            "linea_id": b.get("idlinea"),
-                            "color": "#" + (b.get("colorhex") or "666666").lstrip("#"),
-                            "destino": _limpia(b.get("destino")), "origen": _limpia(b.get("origen")),
-                            "nombre_linea": _limpia(b.get("nombreLinea")),
-                            "lat": float(lat), "lon": float(lon)})
-            res = {"disponible": True, "ts": int(time.time()), "vehiculos": out,
+                v = {"bus": str(b.get("numBus") or ""), "linea": b.get("codigo") or str(b.get("idlinea")),
+                     "linea_id": b.get("idlinea"),
+                     "color": "#" + (b.get("colorhex") or "666666").lstrip("#"),
+                     "destino": _limpia(b.get("destino")), "origen": _limpia(b.get("origen")),
+                     "nombre_linea": _limpia(b.get("nombreLinea")),
+                     "lat": float(lat), "lon": float(lon)}
+                self._situar(v, ahora)
+                vistos.add(v["bus"])
+                out.append(v)
+            for k in list(self._hist):
+                if k not in vistos and ahora - self._hist[k]["t_visto"] > 1800:
+                    del self._hist[k]
+            res = {"disponible": True, "ts": int(ahora), "vehiculos": out,
                    "lineas_activas": len({v["linea"] for v in out})}
             with self.lock:
                 self._veh, self._veh_ts = res, time.time()
@@ -271,13 +298,93 @@ class Emtusa:
             return res
         except Exception as e:  # noqa: BLE001
             self.disponible, self.error = False, str(e)
+            with self.lock:
+                if self._veh is not None and time.time() - self._veh_ts < 60:
+                    # un fallo puntual de EMTUSA: mejor las posiciones de hace unos segundos que nada
+                    return dict(self._veh, viejo=True)
             return {"disponible": False, "error": str(e), "vehiculos": []}
+
+    def _situar(self, v, ahora):
+        """Rumbo, próxima parada y tiempo parado de un bus (añade campos a v)."""
+        pos = (v["lat"], v["lon"])
+        h = self._hist.get(v["bus"])
+        if h is None or h.get("linea") != v["linea_id"]:
+            h = self._hist[v["bus"]] = {"pos": pos, "t_cambio": ahora, "hdg": None, "tray": None,
+                                        "linea": v["linea_id"], "t_visto": ahora}
+        movido = False
+        if h is not None and h.get("linea") == v["linea_id"] and distancia_km(h["pos"], pos) > 0.008:
+            # se ha movido (más de 8 m). EMTUSA renueva la posición cada ~30 s (medido el 26/09)
+            h["hdg"] = _rumbo(h["pos"], pos)
+            h["pos"], h["t_cambio"] = pos, ahora
+            movido = True
+        h["t_visto"] = ahora
+        # recorrido: los de su línea hacia su destino; el más cercano (y el mismo que antes si vale)
+        dn = normaliza(v["destino"])
+        cands = [i for i, t in enumerate(self.trayectos) if t["linea"] == v["linea_id"] and len(t["_pts"]) > 1]
+        mismos = [i for i in cands if normaliza(self.trayectos[i]["destino"]) == dn]
+        mejor = None
+        for i in (mismos or cands):
+            pr = _proyectar(self.trayectos[i]["_pts"], pos)
+            if pr is None:
+                continue
+            d = pr[1] - (0.03 if i == h["tray"] else 0)
+            if mejor is None or d < mejor[0]:
+                mejor = (d, i, pr)
+        if mejor and mejor[2][1] < 0.35:
+            _, i, (seg, dist, frac, rumbo_via) = mejor
+            h["tray"] = i
+            t = self.trayectos[i]
+            ids = t["_ids"]
+            # en la parada (a menos de ~35 m) o camino de la siguiente
+            p_a, p_b = self.paradas_d[ids[seg]], self.paradas_d[ids[seg + 1]]
+            en = None
+            if distancia_km(pos, (p_a["lat"], p_a["lon"])) < 0.035:
+                en = p_a
+            elif distancia_km(pos, (p_b["lat"], p_b["lon"])) < 0.035:
+                en = p_b
+            sig = p_b if en is not p_b else (self.paradas_d[ids[seg + 2]] if seg + 2 < len(ids) else None)
+            v["en_parada"] = {"id": en["id"], "nombre": en["nombre"]} if en else None
+            v["proxima"] = {"id": sig["id"], "nombre": sig["nombre"]} if sig else None
+            if h["hdg"] is None:
+                h["hdg"] = rumbo_via                      # recién visto: el sentido de su recorrido
+            # Velocidad a lo largo del recorrido (para que el mapa lo mueva entre dos lecturas)
+            acc = t["_acc"]
+            s_km = acc[seg] + frac * (acc[seg + 1] - acc[seg])
+            if movido and h.get("tray_s") == i and h.get("t_s"):
+                dt = ahora - h["t_s"]
+                ds = s_km - h["s"]
+                if dt > 3 and -0.05 < ds < 1.5:
+                    vel = max(0.0, min(0.8, ds / dt * 60.0))          # km/min (0,8 = 48 km/h)
+                    h["vel"] = vel if h.get("vel") is None else 0.5 * h["vel"] + 0.5 * vel
+            if movido or h.get("tray_s") != i:
+                h["s"], h["t_s"], h["tray_s"] = s_km, ahora, i
+            # camino hasta la parada siguiente a la próxima: en 30 s rara vez pasa de ahí (la velocidad
+            # media ya incluye lo que pierde en paradas y semáforos)
+            fin = min(ids.index(sig["id"], seg + 1) + 1, len(ids) - 1) if sig else seg + 1
+            px = (t["_pts"][seg][0] + (t["_pts"][seg + 1][0] - t["_pts"][seg][0]) * frac,
+                  t["_pts"][seg][1] + (t["_pts"][seg + 1][1] - t["_pts"][seg][1]) * frac)
+            v["camino"] = [[round(px[0], 6), round(px[1], 6)]] + [
+                [round(q[0], 6), round(q[1], 6)] for q in t["_pts"][seg + 1:fin + 1]]
+        quieto = int(ahora - h["t_cambio"])
+        v["rumbo"] = None if h["hdg"] is None else round(h["hdg"])
+        v["quieto_s"] = quieto
+        # más de ~45 s sin moverse = dos lecturas iguales: está parado de verdad (semáforo, parada…)
+        v["vel"] = round(h.get("vel") or 0.0, 3) if quieto < 45 and v.get("camino") else 0.0
+
+    def llegadas_de(self, ids):
+        """Llegadas de varias paradas a la vez (en paralelo; EMTUSA tarda ~0,3 s por parada)."""
+        from concurrent.futures import ThreadPoolExecutor
+        ids = [i for i in ids if str(i).isdigit()][:10]
+        with ThreadPoolExecutor(max_workers=6) as ex:
+            return dict(zip(ids, ex.map(self.llegadas, ids)))
 
     def enlace(self, lat, lon, radio_m=500, por_parada=3):
         """Paradas cercanas a un punto con sus próximas llegadas (panel tren+bus)."""
         salida = []
-        for p in self.cercanas(lat, lon, radio_m):
-            info = self.llegadas(p["id"])
+        cerca = self.cercanas(lat, lon, radio_m)
+        todas = self.llegadas_de([p["id"] for p in cerca])
+        for p in cerca:
+            info = todas.get(p["id"], {})
             salida.append({**p, "llegadas": info.get("llegadas", [])[:por_parada], "error": info.get("error")})
         return {"disponible": self.disponible, "error": self.error, "paradas": salida}
 
@@ -294,16 +401,51 @@ def _limpia(txt):
     txt = (txt or "").replace("�", "ñ").strip()
     if not txt:
         return ""
+    import re
+
+    def cap(w):
+        # «JOVE-POL.» -> «Jove-Pol.», «(VIESQUES)» -> «(Viesques)»
+        return re.sub(r"[^\W\d_]+", lambda m: m.group(0).capitalize(), w.lower(), count=0)
     out = []
     for i, w in enumerate(txt.split()):
-        b = w.strip(".")
-        if w.upper() in _SIGLAS or (len(b) <= 4 and b.isupper() and not any(v in b.lower() for v in "aeiou")):
+        b = w.strip(".()")
+        if w.upper() in _SIGLAS or (2 <= len(b) <= 4 and b.isupper() and not any(v in b.lower() for v in "aeiouáéíóú")):
             out.append(w)
         elif i > 0 and w.lower() in _MINUS:
             out.append(w.lower())
         else:
-            out.append(w.capitalize())
+            out.append(cap(w))
     return " ".join(out)
+
+
+def _rumbo(a, b):
+    """Rumbo en grados (0 = norte) de a hacia b."""
+    import math
+    la1, la2 = math.radians(a[0]), math.radians(b[0])
+    dlo = math.radians(b[1] - a[1])
+    y = math.sin(dlo) * math.cos(la2)
+    x = math.cos(la1) * math.sin(la2) - math.sin(la1) * math.cos(la2) * math.cos(dlo)
+    return (math.degrees(math.atan2(y, x)) + 360) % 360
+
+
+def _proyectar(pts, p):
+    """(tramo, distancia km, fracción, rumbo del tramo) del punto más cercano de la polilínea."""
+    import math
+    coslat = math.cos(math.radians(p[0]))
+    mejor = None
+    for i in range(len(pts) - 1):
+        ax, ay = (pts[i][1] - p[1]) * 111.32 * coslat, (pts[i][0] - p[0]) * 110.57
+        bx, by = (pts[i + 1][1] - p[1]) * 111.32 * coslat, (pts[i + 1][0] - p[0]) * 110.57
+        dx, dy = bx - ax, by - ay
+        ll = dx * dx + dy * dy
+        t = 0.0 if ll <= 0 else max(0.0, min(1.0, -(ax * dx + ay * dy) / ll))
+        d = math.hypot(ax + t * dx, ay + t * dy)
+        if mejor is None or d < mejor[1]:
+            mejor = (i, d, t)
+    if mejor is None:
+        return None
+    i = mejor[0]
+    return mejor[0], mejor[1], mejor[2], _rumbo(pts[i], pts[i + 1])
 
 
 def _hoy_iso():
