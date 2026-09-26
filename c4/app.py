@@ -56,6 +56,7 @@ class App:
             if self.bus.red_ok:
                 print("Red de bus EMTUSA: %d líneas · %d paradas" % (
                     len(self.bus.lineas_d), len(self.bus.paradas_d)))
+                threading.Thread(target=self.bus.bucle_vivo, daemon=True).start()
         except Exception as e:  # noqa: BLE001
             print("Aviso: no se pudo cargar la red de bus:", e)
             self.bus = None
@@ -315,7 +316,14 @@ def servir(app, abrir=True, en_red=False, publico=False):
             if ruta == "/api/bus/red":
                 return self._json(app.bus.resumen_red() if app.bus else {"error": "sin datos de bus"})
             if ruta == "/api/bus/coordenadas":
-                return self._json(app.bus.vehiculos() if app.bus else {"disponible": False, "vehiculos": []})
+                if not app.bus:
+                    return self._json({"disponible": False, "vehiculos": []})
+                # el móvil pregunta cada 2 s con la versión que tiene: si nada ha cambiado, unos bytes
+                q = parse_qs(urlparse(self.path).query)
+                crudo, gz = app.bus.vehiculos_bytes(True)
+                if q.get("v", [""])[0] and q["v"][0] == app.bus.version:
+                    return self._json({"sin_cambios": True, "version": app.bus.version})
+                return self._enviar(crudo, "application/json; charset=utf-8", gz=gz)
             if ruta == "/api/bus/cercanas":
                 q = parse_qs(urlparse(self.path).query)
                 try:

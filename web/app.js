@@ -1534,7 +1534,7 @@ function prepararIphone() {
   await cargarEstado();
   irA(["inicio", "ir", "viaje", "estacion", "mapa", "malla", "cruces", "precision", "info"].includes(hash) ? hash : "inicio");
   // cada 3 s se pregunta si hay datos nuevos (casi gratis si no los hay); con la app en segundo plano, no
-  setInterval(() => { if (!document.hidden) cargarEstado(); }, 3000);
+  setInterval(() => { if (!document.hidden) cargarEstado(); }, 2000);
   setInterval(() => { if (tabActual === "viaje" && R && document.activeElement !== $("andar")) pintarViaje(); }, 20000);
   document.addEventListener("visibilitychange", () => { if (!document.hidden) cargarEstado(); });
   window.addEventListener("pageshow", () => cargarEstado());

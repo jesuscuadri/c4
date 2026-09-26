@@ -53,6 +53,10 @@ class Emtusa:
         self._veh = None
         self._veh_ts = 0
         self._hist = {}             # bus -> {"pos", "t_cambio", "hdg", "tray"}: para rumbo, «parado» y próxima parada
+        self._pedido = 0            # última vez que alguien miró el mapa en vivo
+        self._version = 0           # sube cada vez que algún bus cambia de posición
+        self._veh_gz = None         # respuesta ya preparada (json, gzip)
+        self._arranque = int(time.time())
         self._lleg_cache = {}       # parada -> (ts, respuesta): muchos móviles miran la misma parada
         self.red_generada = None
         # red (estructura fija en disco)
@@ -276,23 +280,61 @@ class Emtusa:
                 out[c] = m
         return out
 
+    # EMTUSA renueva la posición de cada bus cada ~30 s (medido el 26/09: mediana 31 s), cada bus a
+    # su ritmo. Para enterarse de cada posición nueva nada más publicarse, mientras alguien mira el
+    # mapa se le pregunta cada pocos segundos en segundo plano; el móvil pregunta aún más a menudo
+    # con la versión que tiene y, si no hay nada nuevo, recibe unos pocos bytes.
+    INTERVALO_VIVO_S = 2.5
+    MIRANDO_S = 90
+
+    def bucle_vivo(self):
+        while True:
+            try:
+                if self.activo and time.time() - self._pedido < self.MIRANDO_S:
+                    self._leer_vehiculos()
+                    time.sleep(self.INTERVALO_VIVO_S)
+                    continue
+            except Exception:  # noqa: BLE001
+                time.sleep(5)
+            time.sleep(1)
+
+    @property
+    def version(self):
+        return "%d-%d" % (self._arranque, self._version)
+
     def vehiculos(self):
         """Todos los autobuses en circulación ahora mismo, con su posición (para el mapa en vivo).
 
-        Fuente: autobuses/coordenadas de EMTUSA. Se cachea unos segundos porque muchos
-        navegadores pueden pedirlo a la vez. Además de la posición se calcula, con el
-        recorrido de su línea: hacia dónde va (rumbo), cuál es su próxima parada y si
-        lleva un rato sin moverse (EMTUSA solo da la coordenada)."""
+        Fuente: autobuses/coordenadas de EMTUSA. Además de la posición se calcula, con el
+        recorrido de su línea: hacia dónde va (rumbo), cuál es su próxima parada, a qué
+        velocidad avanza y si lleva un rato sin moverse (EMTUSA solo da la coordenada)."""
         if not self.activo:
             return {"disponible": False, "vehiculos": []}
+        self._pedido = time.time()
         with self.lock:
-            if self._veh is not None and time.time() - self._veh_ts < 4:
-                return self._veh
+            fresco = self._veh is not None and time.time() - self._veh_ts < 4
+        if not fresco:
+            self._leer_vehiculos()
+        with self.lock:
+            return self._veh if self._veh is not None else {"disponible": False, "error": self.error, "vehiculos": []}
+
+    def vehiculos_bytes(self, gz):
+        """La misma respuesta, ya serializada (y comprimida): se pide cada 2 s desde cada móvil."""
+        self.vehiculos()
+        with self.lock:
+            if self._veh_gz is None or self._veh_gz[0] is not self._veh:
+                crudo = json.dumps(self._veh, ensure_ascii=False).encode("utf-8")
+                import gzip
+                self._veh_gz = (self._veh, crudo, gzip.compress(crudo, 5))
+            return self._veh_gz[1], self._veh_gz[2]
+
+    def _leer_vehiculos(self):
         try:
             arr = self._get("autobuses/coordenadas")
             ahora = time.time()
             out = []
             vistos = set()
+            cambio = False
             for b in arr:
                 lat, lon = b.get("latitud"), b.get("longitud")
                 if lat is None or lon is None:
@@ -303,25 +345,32 @@ class Emtusa:
                      "destino": _limpia(b.get("destino")), "origen": _limpia(b.get("origen")),
                      "nombre_linea": _limpia(b.get("nombreLinea")),
                      "lat": float(lat), "lon": float(lon)}
+                previo = self._hist.get(v["bus"])
+                if previo is None or previo.get("raw") != (v["lat"], v["lon"]):
+                    cambio = True
                 self._situar(v, ahora)
                 vistos.add(v["bus"])
                 out.append(v)
             for k in list(self._hist):
                 if k not in vistos and ahora - self._hist[k]["t_visto"] > 1800:
                     del self._hist[k]
-            res = {"disponible": True, "ts": int(ahora), "vehiculos": out,
-                   "lineas_activas": len({v["linea"] for v in out})}
             with self.lock:
-                self._veh, self._veh_ts = res, time.time()
+                viejo = self._veh
+                if cambio or viejo is None or len(viejo.get("vehiculos", [])) != len(out) or viejo.get("viejo"):
+                    self._version += 1
+                    self._veh = {"disponible": True, "ts": round(ahora, 1), "vehiculos": out,
+                                 "lineas_activas": len({v["linea"] for v in out}), "version": self.version}
+                self._veh_ts = ahora
             self.disponible, self.error = True, None
-            return res
         except Exception as e:  # noqa: BLE001
             self.disponible, self.error = False, str(e)
             with self.lock:
                 if self._veh is not None and time.time() - self._veh_ts < 60:
                     # un fallo puntual de EMTUSA: mejor las posiciones de hace unos segundos que nada
-                    return dict(self._veh, viejo=True)
-            return {"disponible": False, "error": str(e), "vehiculos": []}
+                    if not self._veh.get("viejo"):
+                        self._veh = dict(self._veh, viejo=True)
+                else:
+                    self._veh = {"disponible": False, "error": str(e), "vehiculos": []}
 
     def _situar(self, v, ahora):
         """Rumbo, próxima parada y tiempo parado de un bus (añade campos a v)."""
@@ -337,6 +386,7 @@ class Emtusa:
             h["pos"], h["t_cambio"] = pos, ahora
             movido = True
         h["t_visto"] = ahora
+        h["raw"] = pos
         # recorrido: los de su línea hacia su destino; el más cercano (y el mismo que antes si vale)
         dn = normaliza(v["destino"])
         cands = [i for i, t in enumerate(self.trayectos) if t["linea"] == v["linea_id"] and len(t["_pts"]) > 1]

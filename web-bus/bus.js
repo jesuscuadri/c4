@@ -65,7 +65,7 @@ function textoSobre(c) {
 /* Movimiento continuo. EMTUSA solo renueva la posición de cada bus cada ~30 s, así que entre dos
    lecturas se le hace avanzar por su recorrido a la velocidad que llevaba (sin pasar de la próxima
    parada, donde puede detenerse). Cuando llega la posición real, se corrige con suavidad. */
-const INTERVALO_BUS = 5000;
+const INTERVALO_BUS = 2000;   // se pregunta cada 2 s: si EMTUSA no ha movido nada, la respuesta son unos bytes
 let animando = false, ultFrame = 0;
 function km(a, b) { const dx = (b[1] - a[1]) * 80.8, dy = (b[0] - a[0]) * 111.2; return Math.hypot(dx, dy); }
 function rumboDe(a, b) {
@@ -119,11 +119,22 @@ function animarBuses() {
   };
   requestAnimationFrame(paso);
 }
-async function tickBuses() {
-  if (!mapa || !capaBuses) return;
-  let j;
-  try { j = await (await fetch("/api/bus/coordenadas")).json(); }
-  catch (e) { estadoChip(false); return; }
+let versionBuses = "", enCurso = false;
+async function tickBuses(forzar) {
+  if (!mapa || !capaBuses || enCurso) return;
+  enCurso = true;
+  let j, desfase = 0;
+  try {
+    const r = await fetch("/api/bus/coordenadas" + (versionBuses && !forzar ? "?v=" + encodeURIComponent(versionBuses) : ""));
+    j = await r.json();
+    // antigüedad de la respuesta (el servidor la preparó en j.ts): se suma al tiempo que lleva cada bus
+    const hs = parseFloat(r.headers.get("X-Hora-Servidor"));
+    if (hs && j.ts) desfase = Math.max(0, Math.min(30, hs - j.ts));
+  } catch (e) { estadoChip(false); enCurso = false; return; }
+  enCurso = false;
+  if (j && j.sin_cambios) { estadoChip(true); tickBuses._t = performance.now(); return; }
+  if (j && j.version) versionBuses = j.version;
+  if (j && j.vehiculos) for (const v of j.vehiculos) v.quieto_s = (v.quieto_s || 0) + desfase;
   if (!j || !j.vehiculos || j.disponible === false) {
     // EMTUSA no responde: decirlo claro en vez de «0 buses en circulación»
     estadoChip(false);
@@ -135,6 +146,7 @@ async function tickBuses() {
   const cuenta = {};
   for (const v of j.vehiculos) cuenta[v.linea] = (cuenta[v.linea] || 0) + 1;
   tickBuses._cuenta = cuenta;
+  tickBuses._ultimo = j;
   pintarChipsLineas(cuenta);
   const vivos = new Set(), t = performance.now();
   // (el reloj de las animaciones es el de requestAnimationFrame, que es el mismo que performance.now)
@@ -174,7 +186,7 @@ async function tickBuses() {
     ? `<b>${n}</b> ${n === 1 ? "bus" : "buses"} de la línea <b>${esc(filtroLinea)}</b> <button class="vp-x" data-fl="" title="Ver todas">×</button>`
     : `<b>${n}</b> buses en circulación`;
   $("mapa-pie").textContent = (j.viejo ? "EMTUSA tarda en responder: posiciones de hace unos segundos · " : "") +
-    `Actualizado ${new Date((j.ts || Date.now() / 1000) * 1000).toLocaleTimeString("es-ES")} · se mueven solos, sin recargar`;
+    `Posiciones de EMTUSA (cada bus envía la suya cada ~30 s; entre medias se le hace avanzar por su calle) · última ${new Date((j.ts || Date.now() / 1000) * 1000).toLocaleTimeString("es-ES")}`;
 }
 function htmlPopupBus(v) {
   const q = v.quieto_s || 0;
@@ -520,7 +532,7 @@ function setFiltroLinea(codigo) {
   }
   ajustarDetalle();
   pintarChipsLineas(tickBuses._cuenta || {});
-  tickBuses();
+  tickBuses(true);
 }
 function seguirme() {
   if (!navigator.geolocation) { toast("Sin ubicación en este dispositivo"); return; }
