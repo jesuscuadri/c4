@@ -2,7 +2,7 @@
 """Simulación de la línea en vía única: calcula a qué hora llegará cada tren a cada estación."""
 from collections import defaultdict
 
-from .util import ahora_min
+from .util import ahora_min, hm
 
 MOTIVO_MIN = 0.5  # por debajo de esto no merece la pena explicar la espera
 
@@ -21,9 +21,10 @@ class Estimador:
         self.cruces_activos = []
         self.paradas = {}                          # {stop_id: min} duración real de cada parada (aprendida)
         self._gps_prev = {}                        # (tren, j) -> km máximo visto (evita retrocesos)
-        self._avance = {}
+        self._avance = {}                          # tren -> (nivel, posición, minuto) lo más avanzado visto
         self._cruce_movido = {}                    # (tren, tren) -> apartadero al que se movió su cruce
-        self._ultimo = {}                          # tren -> (retraso, minuto, j0) del último dato en directo                          # tren -> (nivel, posición, minuto) lo más avanzado visto
+        self._ultimo = {}                          # tren -> (retraso, minuto, j0, llegada) del último dato en directo
+        self._material = {}                        # tren -> tren que llega y hace ese servicio (rotación)
 
     # ------------------------------------------------------------------ estado actual
     def _recorrido_teorico(self, v, j0, j1):
@@ -64,10 +65,14 @@ class Estimador:
             if p["estado"] == "STOPPED_AT" or (j == 0 and not self.cfg.get("renfe_en_marcha_desde", True)):
                 visto = rt.cuando(v.id, p["stop"], True) if p["estado"] == "STOPPED_AT" else None
                 llegada = min(ahora, visto[0]) if visto else ahora
+                if p.get("supuesto"):
+                    llegada = min(ahora, p["supuesto"])
                 if j == 0:
                     llegada = min(ahora, v.sa[0])
                 e.update(j0=j, llegada0=llegada, parado=True, fuente="posición",
                          situacion=("En " if j == 0 else "Parado en ") + nombre)
+                if p.get("supuesto"):
+                    e.update(fuente="estimado", situacion="Ya debería estar en %s (Renfe no lo ha actualizado)" % nombre)
                 if j == 0:
                     # En la estación de origen el «retraso» de Renfe no vale: es un contador que sube
                     # un minuto por minuto desde antes de la hora de salida (visto el 25/09: 70254 salió
@@ -125,6 +130,37 @@ class Estimador:
                 e["fuente"] = "posición (aprox.)"
             if p["estado"] == "INCOMING_AT":
                 est = min(est, ahora + 1.0)
+                if jb == n - 1:
+                    # En la estación final Renfe deja el tren «entrando» hasta que borra el viaje, aunque
+                    # ya esté en el andén (visto el 25/09: el 70223 llegó a Gijón a las 17:53 y siguió
+                    # «entrando» hasta las 17:57). De «entrando» a «parado» pasa ~1 min (medido).
+                    visto = rt.cuando(v.id, p["stop"], False)
+                    if visto and ahora - visto[0] > 1.5:
+                        llegada = visto[0] + 1.0
+                        e.update(j0=jb, llegada0=llegada, parado=True, fin=True, fuente="posición",
+                                 situacion="Llegado a " + L.nombre[v.k[jb]])
+                        e["retraso"] = max(0.0, llegada - v.sa[jb])
+                        return e
+            tras = self.cfg.get("llegada_supuesta_tras_min", 5)
+            est_n = None
+            if tras and fiable and gps is None and jn > ja:
+                # hora a la que llegaría a la próxima parada (la vía entre medias, a su ritmo)
+                m_n = self._recorrido_teorico(v, ja, jn)
+                if vref:
+                    m_n = min(m_n, abs(L.km[v.k[jn]] - L.km[v.k[ja]]) / (vref / 60.0)
+                              + self.cfg.get("arranque_frenada_min", 0.6))
+                est_n = arranque[0] + m_n
+            if est_n is not None and est_n < ahora - tras:
+                jb, est = jn, est_n
+                # Sabemos cuándo arrancó y ya tendría que haber llegado hace rato: está en la
+                # estación siguiente aunque Renfe siga diciendo la anterior. Pasa sobre todo cuando
+                # espera un cruce en la vía de apartado (visto el 26/09: el 70222 esperó 12 min en
+                # Veriña y Renfe lo tuvo todo ese tiempo «en Tremañes»; decíamos que el 70315
+                # tendría que esperarle en Veriña cuando el 70222 ya estaba allí).
+                sint = {"stop": L.est[v.k[jb]], "estado": "STOPPED_AT", "supuesto": est,
+                        "lat": None, "lon": None, "via": p.get("via")}
+                self._avance[v.id] = (2 * jb, sint, ahora)
+                return self._estado_datos_sintetico(v, sint, u, rt, ahora, e)
             llegada = max(ahora + 0.2, est)
             destino = L.nombre[v.k[jn]]
             if saliendo:
@@ -178,6 +214,19 @@ class Estimador:
         j = next((j for j in range(n) if v.sa[j] + r + tip >= ahora), n - 1)
         e.update(j0=j, llegada0=max(ahora, v.sa[j] + r + tip),
                  situacion="Sin datos en tiempo real: se supone " + ("con su retraso habitual (+%d min)" % round(tip) if tip >= 1 else "en hora"))
+        return e
+
+    def _estado_datos_sintetico(self, v, sint, u, rt, ahora, e0):
+        """Estado a partir de una posición deducida (no la de Renfe)."""
+        guarda = rt.pos.get(v.id)
+        rt.pos[v.id] = sint
+        try:
+            e = self._estado_datos(v, rt, ahora)
+        finally:
+            if guarda is None:
+                rt.pos.pop(v.id, None)
+            else:
+                rt.pos[v.id] = guarda
         return e
 
     def _sin_retrocesos(self, v, p, ahora):
@@ -274,6 +323,32 @@ class Estimador:
                 if (ant is not sig and q and q.get("via") == p["via"] and q["stop"] == p["stop"]
                         and q["estado"] != "STOPPED_AT" and ant.k[-1] == sig.k[0]):
                     out.append((ant, sig))
+        return out
+
+    def _rotaciones_reales(self, viajes, estados, A0):
+        """Qué tren da la vuelta en cabecera para cada salida, con las horas de llegada estimadas."""
+        cfg = self.cfg
+        vmin, esp = cfg["vuelta_minima_min"], cfg["rotacion_espera_max_min"]
+        out = []
+        cabeceras = {v.k[0] for v in viajes}
+        for K in cabeceras:
+            llegan = sorted(((A0[a.id][-1], a) for a in viajes
+                             if a.k[-1] == K and not estados[a.id]["cancelado"] and A0[a.id][-1] is not None),
+                            key=lambda x: x[0])
+            usados = set()
+            for sig in sorted((v for v in viajes if v.k[0] == K and not estados[v.id]["cancelado"]),
+                              key=lambda v: v.sd[0]):
+                for a_lleg, ant in llegan:
+                    if ant.id in usados or ant.dir == sig.dir:
+                        continue
+                    margen = min(vmin, max(2.0, sig.sd[0] - ant.sa[-1]))
+                    if a_lleg < sig.sd[0] - 90:
+                        continue            # llegó hace mucho: ese tren se habrá guardado
+                    if a_lleg + margen > sig.sd[0] + esp:
+                        break               # los que quedan llegan aún más tarde: sale con otro tren
+                    usados.add(ant.id)
+                    out.append((ant, sig, margen))
+                    break
         return out
 
     # ------------------------------------------------------------------ marcha
@@ -435,19 +510,41 @@ class Estimador:
                 jb, ja = b.pos[k], a.pos[k]
                 dep(b, jb, "tramo", a, ja, max(0.0, min(m_cruce, b.sd[jb] - a.sa[ja])))
         # rotaciones de material en cabecera
-        rot_dinamicas = self._rotaciones_por_via(rt)
-        con_via = {sig.id for _, sig in rot_dinamicas}
-        for ant, sig in rot_dinamicas:
-            dep(sig, 0, "rotacion", ant, len(ant.k) - 1, cfg["vuelta_minima_min"],
-                tope=sig.sd[0] + 3 * cfg["rotacion_espera_max_min"])
+        # Ojo: Renfe pone el siguiente servicio «parado en Gijón» unos 30 min antes de su hora aunque
+        # el tren que lo va a hacer todavía venga de camino (visto el 25/09: el 70226 de las 17:56
+        # figuraba en el andén mientras el 70223, que era el mismo tren, llegaba a las 17:53). Así
+        # que aparecer en origen NO quiere decir que el material esté allí: la rotación manda siempre.
+        self._material = {}
+        con_rot = set()
         for ant, sig, margen in L.rotaciones:
-            # si el tren ya aparece en origen, el material está ahí (salvo que la vía diga otra cosa)
-            if sig.id not in con_via and not estados[sig.id]["con_datos"]:
+            con_rot.add(sig.id)
+            if not estados[ant.id]["cancelado"]:
                 dep(sig, 0, "rotacion", ant, len(ant.k) - 1, margen,
                     tope=sig.sd[0] + cfg["rotacion_espera_max_min"])
+                self._material[sig.id] = ant
+        # la vía de Renfe solo sirve para los que no tienen rotación deducida del horario
+        # (en Gijón todos figuran en la vía 12, así que no distingue nada)
+        for ant, sig in self._rotaciones_por_via(rt):
+            if sig.id not in con_rot:
+                dep(sig, 0, "rotacion", ant, len(ant.k) - 1, cfg["vuelta_minima_min"],
+                    tope=sig.sd[0] + 3 * cfg["rotacion_espera_max_min"])
 
         # 1ª pasada sin cruces: hora a la que llegaría cada tren si nadie le cortase el paso
         A0, _, _ = self._resolver(viajes, estados, deps, ahora)
+        if cfg.get("rotaciones_en_directo", True):
+            # Con las llegadas reales ya estimadas, se rehace qué tren hace cada salida de cabecera: el
+            # primero que haya llegado (y haya podido dar la vuelta) hace la siguiente salida. Con retrasos
+            # grandes cambia respecto al horario (visto el 23/09: el 70203, con +30, no hizo el 70208 de
+            # las 7:56 —salió con otro tren— sino el 70306 de las 8:23).
+            nuevas = self._rotaciones_reales(viajes, estados, A0)
+            for clave in list(deps):
+                deps[clave] = [d for d in deps[clave] if d[0] != "rotacion"]
+            self._material = {}
+            for ant, sig, margen in nuevas:
+                dep(sig, 0, "rotacion", ant, len(ant.k) - 1, margen,
+                    tope=sig.sd[0] + cfg["rotacion_espera_max_min"])
+                self._material[sig.id] = ant
+            A0, _, _ = self._resolver(viajes, estados, deps, ahora)
 
         def poner_cruce(a, b, k, info, programado):
             m = cfg["margen_cruce_min"]
@@ -485,13 +582,21 @@ class Estimador:
                     # cruzaron en Regueral). Nunca en la cabecera de uno de los dos, y sin cambiar de
                     # idea a cada momento (se mantiene el elegido mientras siga valiendo).
                     extremos = {a.k[0], a.k[-1], b.k[0], b.k[-1]}
-                    buenos = [c for c in cands if c not in extremos]
+                    # El que esperaba en el cruce del horario (el que llega antes) es el que va en hora:
+                    # se le deja avanzar hasta otro apartadero, pero sigue siendo él quien espera. Nunca
+                    # se traslada el cruce a un sitio donde el que va tarde tuviera que esperar al otro
+                    # (visto el 26/09: se decía que el 70315, con +10, esperaría 7 min en Perlora al
+                    # 70222; en realidad el 70222 le esperó en Veriña y el 70315 pasó sin parar).
+                    espera_a = A0[a.id][a.pos[k]] <= A0[b.id][b.pos[k]]
+                    buenos = [c for c in cands if c not in extremos
+                              and (A0[a.id][a.pos[c]] <= A0[b.id][b.pos[c]]) == espera_a]
                     previo = self._cruce_movido.get((a.id, b.id))
                     if buenos:
                         mejor = min(buenos, key=lambda c: coste[c])
+                        # sin cambiar de idea a cada lectura: se mantiene el elegido mientras siga valiendo
                         if previo in buenos and coste[previo] - coste[mejor] <= 3:
                             mejor = previo
-                        if coste[k] - coste[mejor] > 4:
+                        if coste[k] - coste[mejor] > (1 if mejor == previo else 4):
                             elegido, info = mejor, "movido"
                             self._cruce_movido[(a.id, b.id)] = mejor
             poner_cruce(a, b, elegido, info, elegido == k)
@@ -559,10 +664,25 @@ class Estimador:
                 elif tipo == "seguimiento":
                     txt = "Va detrás de otro tren (el que va a %s): no sale de %s hasta que ese llegue a %s" % (
                         _corto(L.nombre[otro.k[-1]]), sitio, _corto(L.nombre[info]))
+                elif estados[otro.id]["fin"]:
+                    txt = "Sale cuando dé la vuelta el tren que acaba de llegar de %s (es el mismo tren)" % _corto(L.nombre[otro.k[0]])
                 else:
                     txt = "Espera a que llegue el tren que viene de %s: es el que hace este servicio" % _corto(L.nombre[otro.k[0]])
                 motivos.append({"j": j, "k": v.k[j], "texto": txt, "min": round(espera, 1), "tipo": tipo,
                                 "con": otro.num})
+            # ¿El tren que hará este servicio aún viene de camino? Entonces no está en el andén,
+            # aunque Renfe lo ponga «parado en origen» (lo hace media hora antes de la salida).
+            material = None
+            ant = self._material.get(v.id)
+            if (ant is not None and e["j0"] == 0 and not e["fin"] and not estados[ant.id]["fin"]
+                    and not estados[ant.id]["cancelado"] and A[ant.id][-1] is not None
+                    and (estados[ant.id]["con_datos"] or estados[ant.id].get("ultimo_dato") is not None)
+                    and A[ant.id][-1] + self.cfg["vuelta_minima_min"] <= v.sd[0] + self.cfg["rotacion_espera_max_min"]):
+                llega = A[ant.id][-1]
+                material = {"num": ant.num, "id": ant.id, "de": L.nombre[ant.k[0]], "llega": round(llega, 2)}
+                e = dict(e, parado=False,
+                         situacion="Aún no está en el andén: lo hace el tren que viene de %s (llega %s)" % (
+                             _corto(L.nombre[ant.k[0]]), hm(llega)))
             p = rt.pos.get(v.id)
             r = e["retraso"] or 0.0
             r_adif = e["retraso_renfe"] if e.get("retraso_renfe") is not None else r   # lo que diría la app oficial
@@ -588,6 +708,7 @@ class Estimador:
                 "adif_a": [round(x + r_adif, 2) for x in v.sa],
                 "adif_d": [round(x + r_adif, 2) for x in v.sd],
                 "motivos": motivos,
+                "material": material,
                 "via": p.get("via") if p else None,
             })
         cruces = []

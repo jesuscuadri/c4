@@ -41,6 +41,8 @@ CONFIG_DEFECTO = {
     "estaciones_cruce_extra": ["Soto del Barco", "Regueral"],   # tienen vía de cruce aunque el horario casi no las use (visto 26/09)
     "cruce_mover_si_espera_min": 8,    # si un cruce haría esperar más que esto, se adelanta al siguiente apartadero
     "estaciones_cruce_excluir": [],
+    "llegada_supuesta_tras_min": 5,     # en marcha y debería haber llegado hace más de esto: ya está en la estación
+    "retroceso_max_min": 25,            # cuánto tiempo se ignora a Renfe si «hace retroceder» a un tren
     "recuperacion": 0.1,                # con retraso va ~10 % más rápido que el horario (medido 25/09)
     "usar_tiempos_aprendidos": True,
     "usar_correccion_sesgo": True,      # aprende de los fallos: corrige sesgos por estación

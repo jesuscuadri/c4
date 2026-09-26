@@ -199,7 +199,7 @@ class TestEscenarios(Base):
         self.assertTrue(all(x["con"] == "70203" for x in rot))
         # en Cudillero, el 70303 no puede salir hasta que llegue el 70302 (vía única)
         m = por_num["70303"]["motivos"]
-        self.assertTrue(any(x["con"] == "70302" and x["tipo"] in ("tramo", "cruce") for x in m), m)
+        self.assertTrue(any(x["con"] == "70302" and x["tipo"] in ("tramo", "cruce", "rotacion") for x in m), m)
 
     def test_tramo_en_cabecera(self):
         """Sin datos: en Cudillero el horario ya separa llegada y salida, no debe añadir espera."""
@@ -264,3 +264,66 @@ class TestRetrasoRenfeEnOrigen(Base):
         t = next(x for x in res["trenes"] if x["num"] == "70210")
         self.assertAlmostEqual(t["est_d"][0], v.sd[0], delta=0.2)
         self.assertAlmostEqual(t["adif_d"][0], v.sd[0] + 7, delta=0.2)   # la columna «app oficial» sigue siendo la de Renfe
+
+
+class TestCabeceraYCruces(Base):
+    """Lo que se vio en Gijón y Veriña el 25-26/09 (ver comentarios en estimador.py)."""
+
+    def test_salida_de_gijon_sin_material_aun(self):
+        # Renfe pone el 70226 «parado en Gijón» media hora antes, pero el tren que lo hace es el
+        # 70223, que aún está llegando con retraso: no hay ningún tren en el andén todavía.
+        ahora = h("17:50")
+        rt = TiempoReal(self.cfg)
+        self.lectura(rt, ahora - 1, [("70226", "15410", "STOPPED_AT", "12"), ("70223", "15400", "STOPPED_AT")])
+        self.lectura(rt, ahora, [("70226", "15410", "STOPPED_AT", "12"), ("70223", "15400", "IN_TRANSIT_TO")])
+        res = self.calcular(rt, ahora)
+        t = next(x for x in res["trenes"] if x["num"] == "70226")
+        a = next(x for x in res["trenes"] if x["num"] == "70223")
+        self.assertIsNotNone(t["material"])
+        self.assertEqual(t["material"]["num"], "70223")
+        self.assertFalse(t["parado"])
+        self.assertIn("Aún no está en el andén", t["situacion"])
+        self.assertGreaterEqual(t["est_d"][0], a["est_a"][-1] + 2.9)
+
+    def test_entrando_en_la_ultima_estacion_es_llegado(self):
+        # en la estación final Renfe deja el tren «entrando» hasta que borra el viaje
+        rt = TiempoReal(self.cfg)
+        est = Estimador(self.L, dict(self.cfg))
+        t0 = h("17:52")
+        self.lectura(rt, t0 - 0.5, [("70223", "05203", "IN_TRANSIT_TO")])
+        self.lectura(rt, t0, [("70223", "15410", "INCOMING_AT")])
+        self.lectura(rt, t0 + 3, [("70223", "15410", "INCOMING_AT")])
+        res = est.calcular(rt, t0 + 3)
+        a = next(x for x in res["trenes"] if x["num"] == "70223")
+        self.assertTrue(a["fin"])
+        self.assertAlmostEqual(a["est_a"][-1], t0 + 1, delta=0.3)
+
+    def test_parado_en_el_apartadero_aunque_renfe_diga_el_anterior(self):
+        # El 70222 salió de Tremañes y esperó 12 min en Veriña, pero Renfe lo siguió dando en Tremañes
+        rt = TiempoReal(self.cfg)
+        est = Estimador(self.L, dict(self.cfg))
+        t0 = h("16:01")
+        self.lectura(rt, t0 - 1, [("70222", "05203", "STOPPED_AT")])
+        est.calcular(rt, t0 - 1)
+        self.lectura(rt, t0, [("70222", "05203", "IN_TRANSIT_TO")])
+        est.calcular(rt, t0)
+        for m in range(1, 12):
+            self.lectura(rt, t0 + m, [("70222", "05203", "STOPPED_AT")])
+            res = est.calcular(rt, t0 + m)
+        t = next(x for x in res["trenes"] if x["num"] == "70222")
+        v = self.tren("70222")
+        self.assertEqual(t["j0"], v.stop_j["15400"])
+        self.assertTrue(t["parado"])
+        self.assertIn("Veriña", t["situacion"])
+        self.assertLess(t["est_a"][t["j0"]], t0 + 6)
+
+    def test_traslado_de_cruce_no_hace_esperar_al_que_va_tarde(self):
+        # Con un tren muy retrasado, el cruce puede adelantarse a otro apartadero, pero el que
+        # espera sigue siendo el que va en hora, nunca el retrasado.
+        rt = TiempoReal(self.cfg)
+        ahora = h("15:50")
+        self.lectura(rt, ahora, [("70315", "05217", "STOPPED_AT")], [("70315", "05217", 12)])
+        res = self.calcular(rt, ahora)
+        t = next(x for x in res["trenes"] if x["num"] == "70315")
+        # ninguna espera por cruce del 70315 con retraso de 12 min mayor que un par de minutos
+        self.assertTrue(all(m["min"] <= 3 for m in t["motivos"] if m["tipo"] == "cruce"), t["motivos"])

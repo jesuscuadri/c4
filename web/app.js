@@ -294,7 +294,9 @@ function dibujarBus(d, j) {
 /* ---------------------------------------------------------------- panel de estación */
 function pintarEstacion() {
   const k = +$("est").value, e = est(k), now = ahora();
-  $("est-info").innerHTML = e.cruce
+  $("est-info").innerHTML = e.cruce && !e.cruces_dia
+    ? `<span class="tag warn" style="margin:0 6px 0 0">Cabecera</span>Aquí empiezan y terminan trenes: el que sale suele ser el mismo que acaba de llegar, dando la vuelta.`
+    : e.cruce
     ? `<span class="tag warn" style="margin:0 6px 0 0">Vía de cruce</span>Aquí se cruzan trenes unas ${e.cruces_dia} veces al día según el horario.`
     : "Apeadero sin vía de cruce: los trenes no pueden cruzarse aquí.";
   const col = (dir) => {
@@ -317,7 +319,7 @@ function pintarEstacion() {
         const retr = s - t.prog_d[j];
         return `<tr class="clic${aqui ? " aqui" : ""}" data-tren="${t.id}" data-jo="${j}">
           <td><span class="e">${hmS(s)}</span>${Math.abs(retr) >= 1 ? `<br><span style="color:var(--mut);text-decoration:line-through">${hm(t.prog_d[j])}</span>` : ""}</td>
-          <td>→ ${esc(destinoCorto(t))} ${numT(t.num)}${aqui ? `<br><span class="tag ok" style="margin:0">En andén${t.via ? " · vía " + esc(t.via) : ""}</span>` : ""}</td>
+          <td>→ ${esc(destinoCorto(t))} ${numT(t.num)}${aqui ? `<br><span class="tag ok" style="margin:0">En andén${t.via ? " · vía " + esc(t.via) : ""}</span>` : ""}${t.material && j === 0 ? `<br><span style="font-size:12px;color:var(--tx2)">Aún no está: es el tren que llega de ${esc(nombreCorto(t.material.de))} a las ${hm(t.material.llega)}</span>` : ""}</td>
           <td>${tagEstado(t, j)}${cr ? `<br><span style="font-size:12px;color:var(--tx2)">Cruza aquí con ${elQueVa(cr.ida.id === t.id ? cr.vuelta.id : cr.ida.id)}</span>` : ""}${mot ? `<br><span style="font-size:12px;color:var(--warn)">Espera ${Math.round(mot.min)} min</span>` : ""}</td></tr>`;
       }).join("") + `</tbody></table>`;
   };
@@ -331,6 +333,8 @@ function kmTren(t, now) {
   if (t.fin || t.cancelado) return null;
   const n = t.k.length, km = (j) => est(t.k[j]).km;
   if (!t.con_datos && t.j0 === 0 && now < t.est_d[0]) return null; // aún no ha salido
+  // el tren que hará este servicio aún viene de camino: en el mapa ya se ve ese, no hay otro en el andén
+  if (t.material && t.j0 === 0 && now < t.est_d[0]) return null;
   for (let j = Math.max(0, t.j0 - 1); j < n; j++) {
     const a = t.est_a[j], d = t.est_d[j];
     if (a == null) continue;
