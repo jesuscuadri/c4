@@ -63,7 +63,7 @@ CONFIG_DEFECTO = {
     "usar_tiempos_aprendidos": True,
     "usar_correccion_sesgo": False,     # (antigua) corrección por estación: la sustituye la calibración
     "usar_calibracion": True,           # aprende de los fallos: estación+sentido, tren, salida/llegada, antelación
-    "fantasma_origen_min": 45,          # «parado en origen» tanto después de su hora: viaje fantasma de Renfe
+    "fantasma_origen_min": 30,          # «parado en origen» tanto después de su hora: viaje fantasma de Renfe
     "fantasma_min": 180,                # lo mismo en cualquier estación
     "detenido_tras_min": 3,             # parado más de lo normal sin causa: incidencia
     "usar_retraso_tipico": True,        # los trenes que aún no han salido llevan su retraso habitual

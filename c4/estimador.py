@@ -70,13 +70,19 @@ class Estimador:
             e.update(j0=n - 1, llegada0=fin[1], parado=True, fin=True, retraso=fin[2], fuente="posición",
                      con_datos=True, situacion="Llegado a " + L.nombre[v.k[-1]])
             return e
-        if p and p["stop"] in v.stop_j and p["estado"] == "STOPPED_AT":
+        lim = self.cfg.get("fantasma_min", 180)
+        if p and p["stop"] in v.stop_j:
             jp = v.stop_j[p["stop"]]
             tarde = ahora - (v.sd[jp] if jp < n - 1 else v.sa[jp])
-            if tarde > (self.cfg.get("fantasma_origen_min", 60) if jp == 0 else self.cfg.get("fantasma_min", 180)) \
-                    and jp < n - 1:
+            origen = jp == 0 and p["estado"] == "STOPPED_AT"
+            # (también en marcha: el 07/10 a las 23:22 el C-1 22008 de la mañana salía «con +951 min»)
+            if tarde > (self.cfg.get("fantasma_origen_min", 30) if origen else lim) and jp < n - 1:
                 p, u = None, None
-                e.update(con_datos=False, retraso=0.0, retraso_renfe=None, fantasma=True)
+        if u and u.get("retraso") is not None and u["retraso"] > lim:
+            p, u = None, None
+        if p is None and u is None and e["con_datos"]:
+            e.update(con_datos=False, retraso=0.0, retraso_renfe=None, fantasma=True)
+            self._ultimo.pop(v.id, None)
         p = self._sin_retrocesos(v, p, ahora)
         if p and p["stop"] in v.stop_j:
             j = v.stop_j[p["stop"]]
@@ -206,6 +212,8 @@ class Estimador:
         # servicio entero, como el sábado 26/09 a mediodía). Entonces sigue con el último retraso
         # conocido, que es mucho mejor que suponerlo en hora de repente.
         ult = self._ultimo.get(v.id)
+        if ult and ult[0] > self.cfg.get("fantasma_min", 180):
+            ult = None
         if ult and ahora - ult[1] <= self.cfg.get("recordar_retraso_min", 45):
             r = max(r, ult[0])
             tip = 0.0
