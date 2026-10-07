@@ -16,7 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from . import gtfs
 from . import planificador
 from .estimador import Estimador
-from .historial import (Precision, aprender_paradas, aprender_salidas, aprender_sesgos, aprender_tiempos,
+from .historial import (Precision, aprender_calibracion, correccion, aprender_paradas, aprender_salidas, aprender_sesgos, aprender_tiempos,
                         guardar_observaciones, guardar_resumen, resumen)
 from .linea import Linea
 from .red import Red
@@ -49,6 +49,7 @@ class App:
         self.precision = Precision()
         self.aprendidos = {}
         self.sesgos = {}
+        self.calib = None
         self.salidas = {}
         self.paradas = {}
         self.almacen = Almacen()               # guarda lo aprendido fuera del servidor (GitHub)
@@ -225,11 +226,15 @@ class App:
         for nombre, r in self.redes.items():
             res_r = r["est"].calcular(self.rt)
             ahora = res_r["ahora"]
+            for t in res_r["trenes"]:
+                t["linea"] = r["red"].viajes[t["id"]].linea
+                self._calibrar(t, r["red"], ahora)
             if calidad == "directo":
                 self.precision.registrar(res_r, r["red"])
             G = r["glob"]
             for t in res_r["trenes"]:
-                t["linea"] = r["red"].viajes[t["id"]].linea
+                t.pop("_bruta_a", None)
+                t.pop("_bruta_d", None)
                 t["km"] = [round(x, 3) for x in r["red"].viajes[t["id"]].km]
                 t["k"] = [G[k] for k in t["k"]]
                 for m in t["motivos"]:
@@ -252,7 +257,8 @@ class App:
             "con_posicion": sum(1 for t in trenes if t["con_datos"] and not t["fin"]),
             "en_circulacion": sum(1 for t in trenes if not t["fin"] and t["j0"] > 0 or t["parado"] and not t["fin"] and t["con_datos"]),
             "tramos_aprendidos": len(self.aprendidos),
-            "sesgos_corregidos": len(self.sesgos),
+            "sesgos_corregidos": len((getattr(self, "calib", None) or {}).get("k", {})) or len(self.sesgos),
+            "calibracion_n": (getattr(self, "calib", None) or {}).get("n", 0),
             "salidas_aprendidas": len(self.salidas),
             "paradas_aprendidas": len(self.paradas),
             "modo_cruces": self.cfg["cruces"],
@@ -263,6 +269,52 @@ class App:
         with self.lock:
             self.res = res
             self._estado_cache = {}
+
+    def _calibrar(self, t, red, ahora):
+        """Corrige las horas que faltan con lo aprendido de los errores de días anteriores (por
+        estación y sentido, por tren, llegada o salida, según la antelación). Guarda las horas sin
+        corregir para medir y seguir aprendiendo sobre ellas (si no, se aprendería la corrección)."""
+        cal = getattr(self, "calib", None)
+        if not cal or not t["con_datos"] or t["fin"] or t["cancelado"]:
+            return
+        ba, bd = list(t["est_a"]), list(t["est_d"])
+        t["_bruta_a"], t["_bruta_d"] = ba, bd
+        a, d = list(ba), list(bd)
+        lin, num = t["linea"], t["num"]
+        par = str(int(num) % 2) if num.isdigit() else "0"
+        n, j0 = len(a), t["j0"]
+        pmin = self.cfg.get("parada_minima_min", 1.0)
+        delta = 0.0
+        previo = None
+        for j in range(j0, n):
+            stop = red.est[t["k"][j]]
+            if a[j] is not None and j > 0 and not (t["parado"] and j == j0):
+                if t["para"][j]:
+                    delta = correccion(cal, "a", lin, stop, par, ba[j] - ahora, num)
+                a[j] = ba[j] + delta
+            if d[j] is not None and j < n - 1:
+                dd = bd[j] + (correccion(cal, "d", lin, stop, par, bd[j] - ahora, num) if t["para"][j] else delta)
+                retenido = ba[j] is not None and bd[j] - ba[j] > pmin + 0.3   # espera su hora o un cruce
+                if a[j] is not None:
+                    dd = max(dd, a[j] + (min(pmin, bd[j] - ba[j]) if t["para"][j] and ba[j] is not None else 0.0))
+                if retenido:
+                    dd = max(dd, bd[j] - 0.3)      # una espera calculada no se acorta mucho por estadística
+                if t["para"][j]:
+                    dd = max(dd, t["prog_d"][j])   # nunca sale antes de su hora
+                d[j] = dd
+            # siempre hacia delante y nunca en el pasado
+            if a[j] is not None:
+                if previo is not None:
+                    a[j] = max(a[j], previo + 0.1)
+                if j > j0 or not t["parado"]:
+                    a[j] = max(a[j], ahora)
+            if d[j] is not None:
+                d[j] = max(d[j], a[j] if a[j] is not None else d[j], ahora)
+                previo = d[j]
+            elif a[j] is not None:
+                previo = a[j]
+        t["est_a"] = [None if x is None else round(x, 3) for x in a]
+        t["est_d"] = [None if x is None else round(x, 3) for x in d]
 
     def _lineas_de_aviso(self, a):
         """A qué líneas afecta un aviso de Renfe (por sus rutas o sus estaciones)."""
@@ -327,6 +379,14 @@ class App:
         self.aprendidos = aprender_tiempos(res=res) if self.cfg["usar_tiempos_aprendidos"] else {}
         self.salidas = aprender_salidas(res=res) if self.cfg.get("usar_retraso_tipico", True) else {}
         self.sesgos = aprender_sesgos() if self.cfg.get("usar_correccion_sesgo") else {}
+        try:
+            self.calib = aprender_calibracion() if self.cfg.get("usar_calibracion", True) else None
+            if self.calib:
+                print("Calibración aprendida de %d mediciones: %d estaciones-sentido, %d trenes-estación" % (
+                    self.calib["n"], len(self.calib["k"]), len(self.calib.get("t", {}))))
+        except Exception as e:  # noqa: BLE001
+            print("Aviso (calibración):", e)
+            self.calib = None
         self.paradas = aprender_paradas(res=res) if self.cfg["usar_tiempos_aprendidos"] else {}
         self.ultimo_aprendizaje = time.time()
 
@@ -357,6 +417,25 @@ class App:
         nom = {e["id"]: e["nombre"] for e in self.estaciones}
         sesgos = [{"estacion": nom.get(s, s), "min": m}
                   for s, m in sorted(se.items(), key=lambda kv: -abs(kv[1]))]
+        cal = getattr(self, "calib", None) or {}
+        if cal:
+            # correcciones aprendidas de los errores (a 10 min vista): estación, sentido y línea
+            from collections import Counter
+            hacia = {}        # (línea, paridad del número) -> destino más habitual (el sentido)
+            for r in self.redes.values():
+                for v in r["red"].viajes.values():
+                    if v.num.isdigit():
+                        hacia.setdefault((v.linea, str(int(v.num) % 2)), Counter())[r["red"].nombre[v.k[-1]]] += 1
+            sesgos = []
+            for clave, vals in cal.get("k", {}).items():
+                tipo, lin, stop, par = clave.split("|")
+                if abs(vals[1]) < 0.3:
+                    continue
+                h = hacia.get((lin, par))
+                sesgos.append({"estacion": nom.get(stop, stop), "linea": lin, "tipo": tipo,
+                               "hacia": _corto(h.most_common(1)[0][0]) if h else None, "min": vals[1]})
+            sesgos.sort(key=lambda x: -abs(x["min"]))
+            se = cal.get("k", {})
         tramos = [{"de": nom.get(a, a), "a": nom.get(b, b), "min": round(m, 1)}
                   for (a, b), m in sorted(ap.items(), key=lambda kv: kv[0])]
         sal = sorted(self.salidas.items(), key=lambda kv: -kv[1])

@@ -43,6 +43,7 @@ class TiempoReal:
         self.primera = {}        # (trip, stop, estado) -> minuto en que se vio por primera vez
         self.ultimo_estado = {}  # trip -> (stop, estado)
         self.ts_lectura = {}     # trip -> marca de tiempo de la última lectura
+        self.salida_vista = {}   # (trip, stop) -> (minuto en que salió de esa estación, fiable)
         self.coord_vista = {}    # trip -> ((lat, lon), minuto en que apareció esa coordenada)
         self._cache = {}         # url -> (datos, Last-Modified) para no descargar lo que no ha cambiado
         self._avisos_json = None
@@ -151,6 +152,14 @@ class TiempoReal:
             pos[tid] = {"stop": stop, "estado": estado, "ts": ts, "via": via,
                         "lat": lat, "lon": lon, "coord_desde": desde}
             clave = (tid, stop, "STOPPED_AT" if estado == "STOPPED_AT" else "MARCHA")
+            antes = self.ultimo_estado.get(tid)
+            if antes and antes[1] == "STOPPED_AT" and (stop, clave[2]) != antes \
+                    and not (stop == antes[0] and estado == "INCOMING_AT"):
+                # estaba parado en una estación y ahora ya no: salió de ella entre las dos lecturas
+                previa = self.ts_lectura.get(tid)
+                fiable = bool(previa and 0 < ts - previa <= 90)
+                cuando = (ts + previa) / 2.0 if fiable else ts
+                self.salida_vista.setdefault((tid, antes[0]), (ahora_min(cuando), fiable))
             if self.ultimo_estado.get(tid) != (stop, clave[2]):
                 # cambio de estado observado ahora mismo: pasó entre la lectura anterior y esta,
                 # así que lo más probable es que fuera a mitad de camino entre ambas

@@ -174,7 +174,7 @@ class Almacen:
 
 
 # ---------------------------------------------------------------------- paquete <-> disco
-CABECERA_PRECISION = ["fecha", "trip", "stop", "horizonte", "nuestra", "adif", "real"]
+CABECERA_PRECISION = historial.CABECERA_PRECISION
 
 
 def empaquetar():

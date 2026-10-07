@@ -532,6 +532,8 @@ function retrasoEn(t, j) {
 }
 // Etiqueta de estado de un tren en una estación: retraso real si hay datos; si no, «suele +N» o «Previsto»
 function tagEstado(t, j) {
+  if (t.detenido && j >= t.j0)
+    return `<span class="tag bad" title="Lleva ${t.detenido} min parado más de lo normal sin cruce ni causa conocida: puede ser una incidencia. La hora no es segura.">Detenido ${t.detenido}′ · hora sin confirmar</span>`;
   if (t.con_datos) return tagRetraso(retrasoEn(t, j));
   if (t.ultimo_dato != null) {
     const r = Math.round(retrasoEn(t, j));
@@ -1251,7 +1253,7 @@ function tarjetaAprendizaje() {
   const ns = APREN.sesgos_n || 0;
   let s = `<div class="card apr-card"><div class="card-cab"><h3>🧠 Aprende de sus errores</h3></div>
     <p class="sub" style="margin:0 0 10px">El programa se corrige solo: guarda cada predicción, la compara con lo que pasó de verdad y ajusta lo que falla. Cuanto más se usa, más afina.</p>
-    <div class="kpis kpis-4">${kpi(APREN.tramos || 0, "tramos con tiempo real aprendido")}${kpi(APREN.salidas_n || 0, "trenes con su retraso habitual aprendido")}${kpi(APREN.paradas_n || 0, "estaciones con su tiempo de parada real")}${kpi(ns, "estaciones con sesgo corregido")}</div>`;
+    <div class="kpis kpis-4">${kpi(APREN.tramos || 0, "tramos con tiempo real aprendido")}${kpi(APREN.salidas_n || 0, "trenes con su retraso habitual aprendido")}${kpi(APREN.paradas_n || 0, "estaciones con su tiempo de parada real")}${kpi(ns, "correcciones aprendidas de sus fallos")}</div>`;
   const g = APREN.guardado || {};
   s += g.activo
     ? `<p class="apr-guardado ok">☁️ Guardado en GitHub${g.ultimo_guardado ? ` · último guardado ${esc(g.ultimo_guardado)}` : ""}. Aunque el servidor se reinicie, no se pierde nada.</p>`
@@ -1266,9 +1268,9 @@ function tarjetaAprendizaje() {
       }).join("") +
       `</div><p class="sub" style="margin-top:6px">Mientras no han salido, esos trenes ya se calculan con su retraso habitual (y sus cruces), en vez de suponerlos puntuales.</p>`;
   if (APREN.sesgos && APREN.sesgos.length)
-    s += `<h4 class="apr-sub">Estaciones donde se corrige la hora estimada</h4><div class="apr-lista">` + APREN.sesgos.slice(0, 8).map((x) =>
-      `<div class="apr-fila"><span>${esc(x.estacion)}</span><b class="num ${x.min > 0 ? "mas" : "menos"}">${x.min > 0 ? "+" : ""}${dec(x.min)} min</b></div>`).join("") +
-      `</div><p class="sub" style="margin-top:6px">«+» = ahí los trenes suelen llegar algo más tarde de lo previsto; ya está corregido y acotado para no pasarse.</p>`;
+    s += `<h4 class="apr-sub">Dónde se equivocaba y ya se corrige</h4><div class="apr-lista">` + APREN.sesgos.slice(0, 10).map((x) =>
+      `<div class="apr-fila"><span>${x.linea ? chipLinea(x.linea) + " " : ""}${x.tipo === "d" ? "Salida de" : "Llegada a"} ${esc(nombreCorto(x.estacion))}${x.hacia ? ` <span class="pp-sub">· hacia ${esc(x.hacia)}</span>` : ""}</span><b class="num ${x.min > 0 ? "mas" : "menos"}">${x.min > 0 ? "+" : ""}${dec(x.min)} min</b></div>`).join("") +
+      `</div><p class="sub" style="margin-top:6px">Cada predicción se guarda y se compara con lo que pasó. Con eso aprende, por estación y sentido (y tren a tren), cuánto se suele equivocar según la antelación, y lo corrige. «+» = ahí los trenes llegan o salen algo más tarde de lo calculado. Se aprende sobre la estimación sin corregir, así no se persigue la cola.</p>`;
   return s + `</div>`;
 }
 function pintarPrecision() {
@@ -1305,6 +1307,18 @@ function pintarPrecision() {
   // si hoy es lo único que hay, las dos tablas serían iguales: se enseña una
   const igual = th && th.n === tot.n;
   h += tabla(sem, igual ? "Por antelación (hoy)" : "Por antelación · últimos 7 días") + (th && !igual ? tabla(hoy, "Hoy") : "");
+  // por línea: así se ve si alguna línea va peor y hay que afinarla
+  const lins = Object.entries(PREC.lineas || {}).filter(([, x]) => x && x.n >= 20);
+  if (lins.length > 1 || (lins.length === 1 && lins[0][0] !== "C4"))
+    h += `<h3 style="font-size:14px;margin:14px 0 6px">Por línea · últimos 7 días</h3><div class="scroll-x"><table class="tabla num tabla-prec">
+      <thead><tr><th>Línea</th><th>Esta app</th><th>Oficial</th><th>Aciertos</th></tr></thead><tbody>` +
+      lins.map(([l, x]) => `<tr><td>${chipLinea(l)}<div class="sub">${x.n} llegadas</div></td><td><b>${dec(x.error_nuestro)}</b></td><td>${dec(x.error_adif)}</td><td><b>${x.acierto_nuestro}%</b><div class="sub">oficial ${x.acierto_adif}%</div></td></tr>`).join("") +
+      `</tbody></table></div>`;
+  const sal = PREC.salidas && PREC.salidas.total;
+  if (sal && sal.n >= 20)
+    h += `<h3 style="font-size:14px;margin:14px 0 6px">Horas de salida (lo que importa para no perder el tren)</h3>
+      <div class="kpis kpis-4">${kpi(`${dec(sal.error_nuestro)} min`, "error medio en la salida", "yo")}${kpi(`${dec(sal.error_adif)} min`, "app oficial")}${kpi(`${sal.acierto_nuestro}%`, "salidas acertadas a ±1 min", "yo")}${kpi(`${sal.acierto_adif}%`, "app oficial")}</div>
+      <p class="sub" style="margin:4px 0 0">${sal.n} salidas medidas: cuándo dijo que saldría frente a cuándo arrancó de verdad.</p>`;
   el.innerHTML = h + apr;
 }
 
@@ -1416,7 +1430,7 @@ function pintarInicio() {
         <div class="hk"><div class="hk-n num">${prox ? hm(prox.hora) : "—"}</div><div class="hk-l">${prox ? "próx. cruce · " + esc(nombreCorto(prox.estacion)) : "sin cruces próximos"}</div></div>
       </div></div>`;
   if ((R.tramos_aprendidos || 0) + (R.sesgos_corregidos || 0) + (R.salidas_aprendidas || 0) > 0)
-    h += `<div class="apr-strip" onclick="irA('precision')">🧠 <span>Aprendido: <b>${R.tramos_aprendidos || 0}</b> tramos, <b>${R.salidas_aprendidas || 0}</b> trenes con su retraso habitual y <b>${R.sesgos_corregidos || 0}</b> estaciones corregidas</span><span class="cta-fl">›</span></div>`;
+    h += `<div class="apr-strip" onclick="irA('precision')">🧠 <span>Aprendido: <b>${R.tramos_aprendidos || 0}</b> tramos, <b>${R.salidas_aprendidas || 0}</b> trenes con su retraso habitual y <b>${R.sesgos_corregidos || 0}</b> correcciones por sus fallos</span><span class="cta-fl">›</span></div>`;
   h += `<div class="dash-cols"><div class="dash-col">`;
   h += `<button class="cta-ir" onclick="irA('ir')">
       <div class="cta-ic">🧭</div>

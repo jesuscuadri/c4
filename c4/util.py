@@ -61,7 +61,11 @@ CONFIG_DEFECTO = {
     "retroceso_max_min": 25,            # cuánto tiempo se ignora a Renfe si «hace retroceder» a un tren
     "recuperacion": 0.1,                # con retraso va ~10 % más rápido que el horario (medido 25/09)
     "usar_tiempos_aprendidos": True,
-    "usar_correccion_sesgo": True,      # aprende de los fallos: corrige sesgos por estación
+    "usar_correccion_sesgo": False,     # (antigua) corrección por estación: la sustituye la calibración
+    "usar_calibracion": True,           # aprende de los fallos: estación+sentido, tren, salida/llegada, antelación
+    "fantasma_origen_min": 45,          # «parado en origen» tanto después de su hora: viaje fantasma de Renfe
+    "fantasma_min": 180,                # lo mismo en cualquier estación
+    "detenido_tras_min": 3,             # parado más de lo normal sin causa: incidencia
     "usar_retraso_tipico": True,        # los trenes que aún no han salido llevan su retraso habitual
     "renfe_en_marcha_desde": True,      # IN_TRANSIT_TO X de Renfe = acaba de salir de X
     "usar_gps": True,                   # posición GPS del tren sobre la vía para saber cuánto le queda

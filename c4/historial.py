@@ -231,54 +231,225 @@ def aprender_sesgos(dias=14, minimo=6, cap=2.0, desde=None):
     return out
 
 
+CABECERA_PRECISION = ["fecha", "trip", "stop", "horizonte", "nuestra", "adif", "real",
+                      "tipo", "linea", "par", "bruta"]
+
+
+def linea_de(tid):
+    """«C4» a partir de «2078X70208C4»."""
+    i = tid.rfind("C")
+    return tid[i:] if i > 4 else ""
+
+
+def fila_precision(r):
+    """Una medición (lista del CSV, formato viejo de 7 columnas o nuevo de 11) como diccionario,
+    con las horas corregidas si pasan de medianoche. None si no vale."""
+    if not r or r[0] == "fecha" or len(r) < 7:
+        return None
+    try:
+        nuestra, adif, real = float(r[4]), float(r[5]), float(r[6])
+        bruta = float(r[10]) if len(r) > 10 and r[10] not in ("", None) else nuestra
+        h = int(r[3])
+    except (ValueError, IndexError):
+        return None
+
+    def junto(x):          # misma referencia de día que «real» (23:58 frente a 00:03)
+        if x - real > 720:
+            return x - 1440
+        if real - x > 720:
+            return x + 1440
+        return x
+    tid = r[1]
+    return {"fecha": r[0], "trip": tid, "stop": r[2], "h": h, "nuestra": junto(nuestra), "adif": junto(adif),
+            "real": real, "bruta": junto(bruta), "tipo": (r[7] if len(r) > 7 and r[7] else "a"),
+            "linea": (r[8] if len(r) > 8 and r[8] else linea_de(tid)),
+            "par": (r[9] if len(r) > 9 and r[9] != "" else str(int(num_servicio(tid) or 0) % 2)
+                    if num_servicio(tid).isdigit() else "0")}
+
+
+def leer_precision(dias=14, desde=None):
+    """Mediciones de los últimos días (las más antiguas primero)."""
+    if not os.path.isdir(HIST):
+        return []
+    desde = MODELO_DESDE if desde is None else desde
+    out = []
+    for fn in sorted(f for f in os.listdir(HIST) if f.startswith("precision_") and f[10:18] >= desde)[-dias:]:
+        try:
+            with open(os.path.join(HIST, fn), encoding="utf-8") as f:
+                for r in csv.reader(f):
+                    x = fila_precision(r)
+                    if x:
+                        out.append(x)
+        except Exception:  # noqa: BLE001
+            continue
+    return out
+
+
+# --------------------------------------------------------------------------------------------
+# Calibración aprendida de los errores. Medido en producción (C-4, 25/09–07/10, ~25 000 llegadas):
+# el error tenía un sesgo claro por estación Y SENTIDO (en Pravia, por ejemplo, +1,6 min en un
+# sentido y −1,6 en el otro), que la corrección vieja por estación anulaba al mezclar los dos
+# sentidos, y un sesgo general que depende de la antelación (+0,5 min a 5 min vista, ~0 a 30).
+# Ahora se aprende el error de la estimación BRUTA (sin calibrar, así no se persigue la cola) por
+# estación, sentido, línea, llegada/salida y antelación, con «encogimiento» hacia la media de la
+# línea cuando hay pocos datos.
+HORIZ_CAL = (5, 10, 20, 30)
+CAL_K = 10.0          # peso de la media de arriba (equivale a 10 mediciones)
+CAL_K_TREN = 8.0      # lo mismo para el nivel «este tren en esta estación»
+CAL_MAX = 3.0         # tope de corrección (min)
+
+
+def _mediana(v):
+    return statistics.median(v) if v else 0.0
+
+
+def aprender_calibracion(dias=14, minimo=4, filas=None, minimo_tren=3):
+    filas = leer_precision(dias) if filas is None else filas
+    grupos = defaultdict(list)
+    for x in filas:
+        e = x["real"] - x["bruta"]
+        if abs(e) > 8:            # incidencias (un tren parado una hora) no enseñan nada
+            continue
+        t, lin, h = x["tipo"], x["linea"], x["h"]
+        grupos[("g", t, h)].append(e)
+        grupos[("l", t, lin, h)].append(e)
+        grupos[("k", t, lin, x["stop"], x["par"], h)].append(e)
+        grupos[("t", t, num_servicio(x["trip"]), x["stop"], h)].append(e)
+
+    def encoge(vals, padre):
+        n = len(vals)
+        return (n * _mediana(vals) + CAL_K * padre) / (n + CAL_K) if n else padre
+    g = {}
+    for t in ("a", "d"):
+        g[t] = [round(encoge(grupos.get(("g", t, h), []), 0.0), 2) for h in HORIZ_CAL]
+    lineas, claves, trenes = {}, {}, {}
+    lin_de_tren = {}
+    for x in filas:
+        lin_de_tren[num_servicio(x["trip"])] = (x["linea"], x["par"])
+    for c in grupos:
+        if c[0] == "l":
+            lineas.setdefault("%s|%s" % (c[1], c[2]), None)
+        elif c[0] == "k":
+            claves.setdefault("%s|%s|%s|%s" % c[1:5], None)
+        elif c[0] == "t":
+            trenes.setdefault("%s|%s|%s" % c[1:4], None)
+    for c in list(lineas):
+        t, lin = c.split("|")
+        lineas[c] = [round(encoge(grupos.get(("l", t, lin, h), []), g[t][i]), 2) for i, h in enumerate(HORIZ_CAL)]
+    for c in list(claves):
+        t, lin, stop, par = c.split("|")
+        base = lineas.get("%s|%s" % (t, lin), g[t])
+        vals = []
+        for i, h in enumerate(HORIZ_CAL):
+            v = grupos.get(("k", t, lin, stop, par, h), [])
+            vals.append(round(encoge(v, base[i]) if len(v) >= minimo else base[i], 2))
+        if any(abs(a - b) >= 0.15 for a, b in zip(vals, base)):
+            claves[c] = vals
+        else:
+            del claves[c]
+    for c in list(trenes):
+        t, num, stop = c.split("|")
+        lin, par = lin_de_tren.get(num, ("", "0"))
+        base = claves.get("%s|%s|%s|%s" % (t, lin, stop, par)) or lineas.get("%s|%s" % (t, lin), g[t])
+        vals = []
+        for i, h in enumerate(HORIZ_CAL):
+            v = grupos.get(("t", t, num, stop, h), [])
+            vals.append(round((len(v) * _mediana(v) + CAL_K_TREN * base[i]) / (len(v) + CAL_K_TREN)
+                              if len(v) >= minimo_tren else base[i], 2))
+        if any(abs(a - b) >= 0.15 for a, b in zip(vals, base)):
+            trenes[c] = vals
+        else:
+            del trenes[c]
+    return {"h": list(HORIZ_CAL), "g": g, "l": lineas, "k": claves, "t": trenes, "n": len(filas)}
+
+
+def correccion(cal, tipo, linea, stop, par, falta, num=None):
+    """Minutos a sumar a una hora estimada que falta `falta` minutos para pasar."""
+    if not cal or falta is None or falta < 0:
+        return 0.0
+    vals = (num and cal.get("t", {}).get("%s|%s|%s" % (tipo, num, stop))) \
+        or cal["k"].get("%s|%s|%s|%s" % (tipo, linea, stop, par)) \
+        or cal["l"].get("%s|%s" % (tipo, linea)) or cal["g"].get(tipo)
+    if not vals:
+        return 0.0
+    H = cal["h"]
+    if falta <= 2:                 # a punto de llegar: lo observado manda, la corrección se apaga
+        v = vals[0] * falta / 2.0
+    elif falta >= H[-1]:
+        v = vals[-1]
+    elif falta <= H[0]:
+        v = vals[0]
+    else:
+        i = next(i for i in range(len(H) - 1) if H[i] <= falta <= H[i + 1])
+        f = (falta - H[i]) / float(H[i + 1] - H[i])
+        v = vals[i] + (vals[i + 1] - vals[i]) * f
+    return max(-CAL_MAX, min(CAL_MAX, v))
+
+
 class Precision:
-    """Compara, cuando el tren llega de verdad, lo que dijimos antes con lo que diría Adif."""
+    """Compara, cuando el tren llega (o sale) de verdad, lo que dijimos antes con lo que diría Adif."""
 
     def __init__(self):
-        self.pendientes = {}  # (trip, stop) -> {horizonte: (nuestra, adif, cuando)}
+        self.pendientes = {}  # (trip, stop, tipo) -> {horizonte: (nuestra, adif, cuando, bruta)}
         self.hechos = set()
+        self.extra = {}       # (trip, stop, tipo) -> (linea, par)
 
     def registrar(self, res, linea):
         ahora = res["ahora"]
         for t in res["trenes"]:
             if t["fin"] or not t["con_datos"]:
                 continue
-            for j in range(t["j0"], len(t["k"])):
-                if not t["para"][j] or t["est_a"][j] is None:
+            lin = t.get("linea") or linea_de(t["id"])
+            num = num_servicio(t["id"])
+            par = str(int(num) % 2) if num.isdigit() else "0"
+            n = len(t["k"])
+            for j in range(t["j0"], n):
+                if not t["para"][j]:
                     continue
-                clave = (t["id"], linea.est[t["k"][j]])
-                if clave in self.hechos:
-                    continue
-                falta = t["est_a"][j] - ahora
-                reg = self.pendientes.setdefault(clave, {})
-                for h in HORIZONTES:
-                    if h not in reg and h - 3 < falta <= h:
-                        reg[h] = (t["est_a"][j], t["adif_a"][j], ahora)
+                stop = linea.est[t["k"][j]]
+                for tipo, est, adif, bruta in (
+                        ("a", t["est_a"], t["adif_a"], t.get("_bruta_a") or t["est_a"]),
+                        ("d", t["est_d"], t.get("adif_d") or t["adif_a"], t.get("_bruta_d") or t["est_d"])):
+                    if tipo == "a" and j == 0 or tipo == "d" and j == n - 1 or est[j] is None:
+                        continue
+                    if tipo == "a" and t["parado"] and j == t["j0"]:
+                        continue                       # ya está ahí
+                    clave = (t["id"], stop, tipo)
+                    if clave in self.hechos:
+                        continue
+                    falta = est[j] - ahora
+                    reg = self.pendientes.setdefault(clave, {})
+                    self.extra[clave] = (lin, par)
+                    for h in HORIZONTES:
+                        if h not in reg and h - 3 < falta <= h:
+                            reg[h] = (est[j], adif[j], ahora, bruta[j] if bruta[j] is not None else est[j])
 
     def observar(self, rt, guardar=True):
         filas = []
-        for (tid, stop), reg in list(self.pendientes.items()):
-            visto = rt.cuando(tid, stop, True)
+        salidas = getattr(rt, "salida_vista", {})
+        for (tid, stop, tipo), reg in list(self.pendientes.items()):
+            visto = rt.cuando(tid, stop, True) if tipo == "a" else salidas.get((tid, stop))
             if not visto:
                 continue
             real, fiable = visto
-            del self.pendientes[(tid, stop)]
-            self.hechos.add((tid, stop))
+            del self.pendientes[(tid, stop, tipo)]
+            lin, par = self.extra.pop((tid, stop, tipo), ("", "0"))
+            self.hechos.add((tid, stop, tipo))
             if not fiable:
-                continue  # ya estaba parado al empezar: no sabemos cuándo llegó
-            for h, (nuestra, adif, cuando) in reg.items():
+                continue  # ya estaba así al empezar: no sabemos cuándo pasó
+            for h, (nuestra, adif, cuando, bruta) in reg.items():
                 if real < cuando - 0.5:
                     continue
-                filas.append([date.today().isoformat(), tid, stop, h, "%.2f" % nuestra, "%.2f" % adif, "%.2f" % real])
+                filas.append([date.today().isoformat(), tid, stop, h, "%.2f" % nuestra, "%.2f" % adif, "%.2f" % real,
+                              tipo, lin, par, "%.2f" % bruta])
         if filas and guardar:
-            _anexar(_fichero("precision"), ["fecha", "trip", "stop", "horizonte", "nuestra", "adif", "real"], filas)
+            _anexar(_fichero("precision"), CABECERA_PRECISION, filas)
         return filas
 
     @staticmethod
     def estadisticas(dias=7, desde=None):
-        """Acierto de los últimos días. Solo cuenta desde que se estrenó el modelo actual (MODELO_DESDE):
-        comparar con errores de versiones anteriores no diría nada de cómo acierta ahora. Si aún no
-        hay mediciones del modelo actual, se enseñan las anteriores avisándolo."""
+        """Acierto de los últimos días: total, por antelación, por línea y en las salidas. Solo cuenta
+        desde que se estrenó el modelo actual (MODELO_DESDE)."""
         desde = MODELO_DESDE if desde is None else desde
         hoy = date.today()
         dias_ok = [hoy - timedelta(days=n) for n in range(dias)]
@@ -287,6 +458,7 @@ class Precision:
         else:
             anterior = False
         grupos = {"hoy": defaultdict(list), "semana": defaultdict(list)}
+        por_linea, salidas = defaultdict(list), defaultdict(list)
         for n in range(dias):
             d = hoy - timedelta(days=n)
             if d.strftime("%Y%m%d") < desde:
@@ -295,14 +467,18 @@ class Precision:
             if not os.path.exists(ruta):
                 continue
             with open(ruta, encoding="utf-8") as f:
-                for r in csv.DictReader(f):
-                    try:
-                        fila = (float(r["nuestra"]) - float(r["real"]), float(r["adif"]) - float(r["real"]))
-                    except ValueError:
+                for r in csv.reader(f):
+                    x = fila_precision(r)
+                    if not x:
                         continue
-                    grupos["semana"][int(r["horizonte"])].append(fila)
+                    fila = (x["nuestra"] - x["real"], x["adif"] - x["real"])
+                    if x["tipo"] == "d":
+                        salidas[x["h"]].append(fila)
+                        continue
+                    grupos["semana"][x["h"]].append(fila)
+                    por_linea[x["linea"]].append(fila)
                     if n == 0:
-                        grupos["hoy"][int(r["horizonte"])].append(fila)
+                        grupos["hoy"][x["h"]].append(fila)
 
         def resumen(filas):
             if not filas:
@@ -321,6 +497,9 @@ class Precision:
             out[periodo] = {str(h): resumen(g.get(h, [])) for h in HORIZONTES}
             todas = [x for h in HORIZONTES for x in g.get(h, [])]
             out[periodo]["total"] = resumen(todas)
+        out["lineas"] = {lin: resumen(v) for lin, v in sorted(por_linea.items()) if lin}
+        out["salidas"] = {str(h): resumen(salidas.get(h, [])) for h in HORIZONTES}
+        out["salidas"]["total"] = resumen([x for h in HORIZONTES for x in salidas.get(h, [])])
         out["modelo_desde"] = MODELO_DESDE
         out["incluye_modelo_anterior"] = anterior
         return out

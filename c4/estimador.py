@@ -25,6 +25,7 @@ class Estimador:
         self._cruce_movido = {}                    # (tren, tren) -> apartadero al que se movió su cruce
         self._ultimo = {}                          # tren -> (retraso, minuto, j0, llegada) del último dato en directo
         self._material = {}                        # tren -> tren que llega y hace ese servicio (rotación)
+        self._terminado = {}                       # tren -> (minuto, llegada, retraso): ya llegó a su destino
 
     # ------------------------------------------------------------------ estado actual
     def _recorrido_teorico(self, v, j0, j1):
@@ -37,6 +38,8 @@ class Estimador:
 
     def _estado_inicial(self, v, rt, ahora):
         e = self._estado_datos(v, rt, ahora)
+        if e["fin"] and e["con_datos"] and not e["cancelado"] and v.id not in self._terminado:
+            self._terminado[v.id] = (ahora, e["llegada0"], e["retraso"] or 0.0)
         if e["con_datos"] and not e["cancelado"]:
             # último dato bueno de este tren: retraso, cuándo, dónde estaba y cuándo llegaba allí
             self._ultimo[v.id] = (e["retraso"] or 0.0, ahora, e["j0"], e["llegada0"])
@@ -58,6 +61,22 @@ class Estimador:
         if u and u.get("cancelado"):
             e.update(fin=True, cancelado=True, situacion="Cancelado")
             return e
+        # Viajes fantasma (vistos en directo el 07/10). Cuando un tren acaba, Renfe a veces lo vuelve a
+        # publicar PARADO EN SU ESTACIÓN DE ORIGEN con un «retraso» que sube un minuto por minuto (el
+        # 70771 llegó a Pola de Siero a las 22:31 y a las 22:32 «estaba» en Oviedo con +32), y de noche
+        # publica los primeros trenes de mañana con +17 horas. No son trenes: se descartan.
+        fin = self._terminado.get(v.id)
+        if fin and not (p and p["stop"] == L.est[v.k[-1]]):
+            e.update(j0=n - 1, llegada0=fin[1], parado=True, fin=True, retraso=fin[2], fuente="posición",
+                     con_datos=True, situacion="Llegado a " + L.nombre[v.k[-1]])
+            return e
+        if p and p["stop"] in v.stop_j and p["estado"] == "STOPPED_AT":
+            jp = v.stop_j[p["stop"]]
+            tarde = ahora - (v.sd[jp] if jp < n - 1 else v.sa[jp])
+            if tarde > (self.cfg.get("fantasma_origen_min", 60) if jp == 0 else self.cfg.get("fantasma_min", 180)) \
+                    and jp < n - 1:
+                p, u = None, None
+                e.update(con_datos=False, retraso=0.0, retraso_renfe=None, fantasma=True)
         p = self._sin_retrocesos(v, p, ahora)
         if p and p["stop"] in v.stop_j:
             j = v.stop_j[p["stop"]]
@@ -636,6 +655,19 @@ class Estimador:
         return self._salida(viajes, estados, A, D, por_que, ahora, rt)
 
     # ------------------------------------------------------------------ resultado
+    def _detenido(self, v, e, motivos, ahora):
+        """Minutos que lleva parado un tren en una estación intermedia MÁS de lo normal y sin causa
+        conocida (ni cruce ni vía única): una incidencia. Ahí ninguna hora es segura y hay que decirlo.
+        (Medido en producción: casi todos los errores grandes, de 10 a 60 min, son trenes así.)"""
+        j = e["j0"]
+        if not (e["parado"] and e["con_datos"] and 0 < j < len(v.k) - 1) or e.get("fuente") == "estimado":
+            return None
+        if any(m.get("j") == j for m in motivos):
+            return None
+        normal = max(e["llegada0"] + self.cfg.get("parada_real_min", 1.0) + 0.5, v.sd[j])
+        extra = ahora - normal
+        return round(extra) if extra >= self.cfg.get("detenido_tras_min", 3) else None
+
     def _mezclar(self, v, e, a_v, d_v, r, ahora):
         """A mucha distancia, la simulación acumula incertidumbre (cruces que se mueven, retrasos
         que se recuperan...). Medido con datos reales de la C-4: a partir de ~5 min, mezclar lo
@@ -721,6 +753,9 @@ class Estimador:
                 est_a, est_d = A[v.id], D[v.id]     # espera explicada (cruce, vía única...): manda la simulación
             else:
                 est_a, est_d = self._mezclar(v, e, A[v.id], D[v.id], r, ahora)
+            det = self._detenido(v, e, motivos, ahora)
+            if det:
+                e["situacion"] += " · lleva %d min parado de más (¿incidencia?)" % det
             trenes.append({
                 "id": v.id, "num": v.num, "dir": v.dir,
                 "origen": L.nombre[v.k[0]], "destino": L.nombre[v.k[-1]],
@@ -740,6 +775,7 @@ class Estimador:
                 "motivos": motivos,
                 "material": material,
                 "via": p.get("via") if p else None,
+                "detenido": det,
             })
         cruces = []
         for a, b, k, info, k0 in self.cruces_activos:
