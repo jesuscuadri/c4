@@ -352,6 +352,11 @@ class App:
         ids = {t["id"] for t in trenes}
         cruces = [c for c in res["cruces"] if c["ida"]["id"] in ids or c["vuelta"]["id"] in ids]
         out = dict(res, trenes=trenes, cruces=cruces, lineas_pedidas=lineas or "todas")
+        if quiero is not None and len(quiero) == 1:
+            try:
+                out.update(self.aprendido_linea(next(iter(quiero))))
+            except Exception:  # noqa: BLE001
+                pass
         if quiero is not None:   # cuentas de la cabecera: solo las líneas pedidas
             sel = [t for t in res["trenes"] if t["linea"] in quiero]
             out["con_posicion"] = sum(1 for t in sel if t["con_datos"] and not t["fin"])
@@ -408,12 +413,42 @@ class App:
         out.sort(key=lambda x: x["sale"])
         return {"fecha": dia.isoformat(), "trenes": out[:4]}
 
-    def aprendizaje(self):
-        """Qué ha aprendido el sistema: tiempos reales de marcha y correcciones por errores."""
+    def _de_linea(self, lin):
+        """(paradas de la línea, números de sus trenes) para filtrar lo aprendido por línea."""
+        for r in self.redes.values():
+            red = r["red"]
+            if lin in red.ejes:
+                ks = set(red.ejes[lin]["nodos"]) | set(red.ejes[lin]["otros"])
+                return ({red.est[k] for k in ks}, {v.num for v in red.viajes.values() if v.linea == lin})
+        return set(), set()
+
+    def aprendido_linea(self, lin):
+        """Cuentas de lo aprendido para una línea (para la cabecera de la app)."""
+        c = getattr(self, "_aprendido_cache", {})
+        clave = (lin, self.ultimo_aprendizaje)
+        if clave not in c:
+            stops, nums = self._de_linea(lin)
+            cal = getattr(self, "calib", None) or {}
+            c = {clave: {"tramos_aprendidos": sum(1 for a, b in self.aprendidos if a in stops and b in stops),
+                         "salidas_aprendidas": sum(1 for n in self.salidas if n in nums),
+                         "paradas_aprendidas": sum(1 for s in self.paradas if s in stops),
+                         "sesgos_corregidos": sum(1 for k in cal.get("k", {}) if k.split("|")[1] == lin)}}
+            self._aprendido_cache = c
+        return c[clave]
+
+    def aprendizaje(self, linea=None):
+        """Qué ha aprendido el sistema: tiempos reales de marcha y correcciones por errores
+        (de una línea si se pide: así cada línea enseña lo suyo)."""
         with self.lock:
             L, ap, se = self.linea, self.aprendidos, self.sesgos
         if not L:
             return {"cargando": True}
+        sal_d, par_d = self.salidas, self.paradas
+        if linea:
+            stops, nums = self._de_linea(linea)
+            ap = {k: v for k, v in ap.items() if k[0] in stops and k[1] in stops}
+            sal_d = {n: m for n, m in sal_d.items() if n in nums}
+            par_d = {s_: m for s_, m in par_d.items() if s_ in stops}
         nom = {e["id"]: e["nombre"] for e in self.estaciones}
         sesgos = [{"estacion": nom.get(s, s), "min": m}
                   for s, m in sorted(se.items(), key=lambda kv: -abs(kv[1]))]
@@ -427,24 +462,27 @@ class App:
                     if v.num.isdigit():
                         hacia.setdefault((v.linea, str(int(v.num) % 2)), Counter())[r["red"].nombre[v.k[-1]]] += 1
             sesgos = []
+            se = {}
             for clave, vals in cal.get("k", {}).items():
                 tipo, lin, stop, par = clave.split("|")
+                if linea and lin != linea:
+                    continue
+                se[clave] = vals
                 if abs(vals[1]) < 0.3:
                     continue
                 h = hacia.get((lin, par))
                 sesgos.append({"estacion": nom.get(stop, stop), "linea": lin, "tipo": tipo,
                                "hacia": _corto(h.most_common(1)[0][0]) if h else None, "min": vals[1]})
             sesgos.sort(key=lambda x: -abs(x["min"]))
-            se = cal.get("k", {})
         tramos = [{"de": nom.get(a, a), "a": nom.get(b, b), "min": round(m, 1)}
                   for (a, b), m in sorted(ap.items(), key=lambda kv: kv[0])]
-        sal = sorted(self.salidas.items(), key=lambda kv: -kv[1])
+        sal = sorted(sal_d.items(), key=lambda kv: -kv[1])
         return {"guardado": self.almacen.estado(),
                 "tramos": len(ap), "sesgos_n": len(se), "sesgos": sesgos, "tramos_lista": tramos[:80],
                 "salidas_n": len(sal), "salidas": [{"num": n, "min": m} for n, m in sal[:12]],
-                "paradas_n": len(self.paradas),
+                "paradas_n": len(par_d), "linea": linea,
                 "paradas": [{"estacion": nom.get(s, s), "min": m}
-                            for s, m in sorted(self.paradas.items(), key=lambda kv: -kv[1])[:12]]}
+                            for s, m in sorted(par_d.items(), key=lambda kv: -kv[1])[:12]]}
 
     def geocode(self, q):
         with self.lock:
@@ -628,9 +666,11 @@ def servir(app, abrir=True, en_red=False, publico=False):
                         lj["url_movil"] = app.url_movil
                     return self._json(lj or {"cargando": True, "error": app.error_inicio})
             if ruta == "/api/precision":
-                return self._json(Precision.estadisticas())
+                q = parse_qs(urlparse(self.path).query)
+                return self._json(Precision.estadisticas(linea=(q.get("linea", [""])[0] or None)))
             if ruta == "/api/aprendizaje":
-                return self._json(app.aprendizaje())
+                q = parse_qs(urlparse(self.path).query)
+                return self._json(app.aprendizaje(q.get("linea", [""])[0] or None))
             if ruta == "/api/ping":
                 return self._json({"ok": True, "hora": datetime.now().strftime("%H:%M:%S")})
             if ruta == "/api/bus/red":

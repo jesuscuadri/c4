@@ -447,12 +447,13 @@ class Precision:
         return filas
 
     @staticmethod
-    def estadisticas(dias=7, desde=None):
+    def estadisticas(dias=7, desde=None, linea=None):
         """Acierto de los últimos días: total, por antelación, por línea y en las salidas. Solo cuenta
         desde que se estrenó el modelo actual (MODELO_DESDE)."""
         desde = MODELO_DESDE if desde is None else desde
         hoy = date.today()
         dias_ok = [hoy - timedelta(days=n) for n in range(dias)]
+        lineas = set(linea.split(",")) if linea else None
         if not any(d.strftime("%Y%m%d") >= desde and os.path.exists(_fichero("precision", d)) for d in dias_ok):
             desde, anterior = "", True
         else:
@@ -472,11 +473,14 @@ class Precision:
                     if not x:
                         continue
                     fila = (x["nuestra"] - x["real"], x["adif"] - x["real"])
+                    if x["tipo"] == "a":
+                        por_linea[x["linea"]].append(fila)       # la comparativa siempre con todas
+                    if lineas is not None and x["linea"] not in lineas:
+                        continue
                     if x["tipo"] == "d":
                         salidas[x["h"]].append(fila)
                         continue
                     grupos["semana"][x["h"]].append(fila)
-                    por_linea[x["linea"]].append(fila)
                     if n == 0:
                         grupos["hoy"][x["h"]].append(fila)
 
@@ -500,6 +504,7 @@ class Precision:
         out["lineas"] = {lin: resumen(v) for lin, v in sorted(por_linea.items()) if lin}
         out["salidas"] = {str(h): resumen(salidas.get(h, [])) for h in HORIZONTES}
         out["salidas"]["total"] = resumen([x for h in HORIZONTES for x in salidas.get(h, [])])
+        out["linea"] = linea
         out["modelo_desde"] = MODELO_DESDE
         out["incluye_modelo_anterior"] = anterior
         return out

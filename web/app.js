@@ -137,12 +137,13 @@ function pintarCabecera() {
 async function cambiarLinea(c) {
   if (c === LSEL || !RED.lineas[c]) return;
   LSEL = c; guardar("linea", c);
-  R = null; pintarTrenesMapa._cruces = null;
+  R = null; pintarTrenesMapa._cruces = null; PREC = APREN = null;
   await cargarLinea();
   iniciarSelectores();
   if (mapa) { pintarLineasMapa(); if (!MAPA_TODAS) vistaInicialMapa(); }
   await cargarEstado(true);
   pintarTodo();
+  if (tabActual === "precision") cargarPrecision();
 }
 async function cargarEstado(forzar) {
   if (cargarEstado._en && !forzar) return;            // no solapar peticiones
@@ -200,8 +201,12 @@ async function cargarTodas() {
 }
 async function cargarPrecision() {
   try {
-    PREC = await pedir("/api/precision");
-    try { APREN = await pedir("/api/aprendizaje"); } catch (e) { /* opcional */ }
+    const lin = LSEL, q = "?linea=" + encodeURIComponent(lin || "");
+    const p = await pedir("/api/precision" + q);
+    let a = null;
+    try { a = await pedir("/api/aprendizaje" + q); } catch (e) { /* opcional */ }
+    if (lin !== LSEL) return;             // se cambió de línea mientras tanto
+    PREC = p; APREN = a;
     pintarPrecision();
   } catch (e) { /* nada */ }
 }
@@ -1251,7 +1256,7 @@ function tarjetaAprendizaje() {
   if (!APREN || APREN.cargando) return "";
   const kpi = (v, l) => `<div class="kpi"><div class="v num">${v}</div><div class="l">${l}</div></div>`;
   const ns = APREN.sesgos_n || 0;
-  let s = `<div class="card apr-card"><div class="card-cab"><h3>🧠 Aprende de sus errores</h3></div>
+  let s = `<div class="card apr-card"><div class="card-cab"><h3>🧠 Lo que ha aprendido de la ${esc(LSEL)}</h3></div>
     <p class="sub" style="margin:0 0 10px">El programa se corrige solo: guarda cada predicción, la compara con lo que pasó de verdad y ajusta lo que falla. Cuanto más se usa, más afina.</p>
     <div class="kpis kpis-4">${kpi(APREN.tramos || 0, "tramos con tiempo real aprendido")}${kpi(APREN.salidas_n || 0, "trenes con su retraso habitual aprendido")}${kpi(APREN.paradas_n || 0, "estaciones con su tiempo de parada real")}${kpi(ns, "correcciones aprendidas de sus fallos")}</div>`;
   const g = APREN.guardado || {};
@@ -1278,15 +1283,24 @@ function pintarPrecision() {
   if (!PREC) { el.innerHTML = tarjetaAprendizaje() || `<div class="vacio">Cargando…</div>`; return; }
   const sem = PREC.semana || {}, hoy = PREC.hoy || {}, tot = sem.total, th = hoy.total;
   const apr = tarjetaAprendizaje();
+  const enL = `en la ${esc(LSEL)}`;
+  const tablaLineas = () => {
+    const lins = Object.entries(PREC.lineas || {}).filter(([, x]) => x && x.n >= 20);
+    if (!lins.length) return "";
+    return `<h3 style="font-size:14px;margin:14px 0 6px">Todas las líneas · últimos 7 días</h3><div class="scroll-x"><table class="tabla num tabla-prec">
+      <thead><tr><th>Línea</th><th>Esta app</th><th>Oficial</th><th>Aciertos</th></tr></thead><tbody>` +
+      lins.map(([l, x]) => `<tr class="clic${l === LSEL ? " aqui" : ""}" data-linea-prec="${esc(l)}"><td>${chipLinea(l)}<div class="sub">${x.n} llegadas</div></td><td><b>${dec(x.error_nuestro)}</b></td><td>${dec(x.error_adif)}</td><td><b>${x.acierto_nuestro}%</b><div class="sub">oficial ${x.acierto_adif}%</div></td></tr>`).join("") +
+      `</tbody></table></div><p class="sub" style="margin:4px 0 0">Toca una línea para ver su detalle.</p>`;
+  };
   if (!tot) {
-    el.innerHTML = apr + `<div class="aviso info"><span>ℹ</span><div><b>Aún no hay mediciones de acierto.</b> Se acumulan solas mientras el programa está abierto y Renfe da datos en directo. Con un par de días de uso verás si acierta más que la app oficial.</div></div>`;
+    el.innerHTML = `<div class="aviso info"><span>ℹ</span><div><b>Aún no hay mediciones de acierto ${enL}.</b> Se acumulan solas cada vez que un tren de esta línea llega o sale con Renfe dando datos en directo. En un par de días verás cuánto acierta frente a la app oficial, y desde entonces se corrige sola con sus propios errores.</div></div>` + tablaLineas() + apr;
     return;
   }
   const kpi = (v, l, cls) => `<div class="kpi${cls ? " " + cls : ""}"><div class="v num">${v}</div><div class="l">${l}</div></div>`;
   const gana = tot.error_nuestro < tot.error_adif;
   let h = `<div class="veredicto ${gana ? "ok" : "warn"}">${gana
-      ? `<b>Sí:</b> se equivoca de media <b>${dec(tot.error_nuestro)} min</b>; la app oficial, <b>${dec(tot.error_adif)} min</b>.`
-      : `<b>Todavía no:</b> se equivoca de media ${dec(tot.error_nuestro)} min y la app oficial ${dec(tot.error_adif)} min. Está aprendiendo.`}
+      ? `<b>Sí, ${enL}:</b> se equivoca de media <b>${dec(tot.error_nuestro)} min</b>; la app oficial, <b>${dec(tot.error_adif)} min</b>.`
+      : `<b>Todavía no ${enL}:</b> se equivoca de media ${dec(tot.error_nuestro)} min y la app oficial ${dec(tot.error_adif)} min. Está aprendiendo.`}
       <span class="sub"> ${tot.n} llegadas medidas${PREC.incluye_modelo_anterior ? " con la versión anterior del cálculo (la actual empieza a medirse el " + fechaCorta(PREC.modelo_desde) + ")" : PREC.modelo_desde ? " con el cálculo actual (desde el " + fechaCorta(PREC.modelo_desde) + ")" : " en los últimos 7 días"}.</span></div>`;
   h += `<div class="kpis kpis-4">` +
     kpi(`${dec(tot.error_nuestro)} min`, "error medio de esta app", "yo") +
@@ -1307,19 +1321,12 @@ function pintarPrecision() {
   // si hoy es lo único que hay, las dos tablas serían iguales: se enseña una
   const igual = th && th.n === tot.n;
   h += tabla(sem, igual ? "Por antelación (hoy)" : "Por antelación · últimos 7 días") + (th && !igual ? tabla(hoy, "Hoy") : "");
-  // por línea: así se ve si alguna línea va peor y hay que afinarla
-  const lins = Object.entries(PREC.lineas || {}).filter(([, x]) => x && x.n >= 20);
-  if (lins.length > 1 || (lins.length === 1 && lins[0][0] !== "C4"))
-    h += `<h3 style="font-size:14px;margin:14px 0 6px">Por línea · últimos 7 días</h3><div class="scroll-x"><table class="tabla num tabla-prec">
-      <thead><tr><th>Línea</th><th>Esta app</th><th>Oficial</th><th>Aciertos</th></tr></thead><tbody>` +
-      lins.map(([l, x]) => `<tr><td>${chipLinea(l)}<div class="sub">${x.n} llegadas</div></td><td><b>${dec(x.error_nuestro)}</b></td><td>${dec(x.error_adif)}</td><td><b>${x.acierto_nuestro}%</b><div class="sub">oficial ${x.acierto_adif}%</div></td></tr>`).join("") +
-      `</tbody></table></div>`;
   const sal = PREC.salidas && PREC.salidas.total;
   if (sal && sal.n >= 20)
     h += `<h3 style="font-size:14px;margin:14px 0 6px">Horas de salida (lo que importa para no perder el tren)</h3>
       <div class="kpis kpis-4">${kpi(`${dec(sal.error_nuestro)} min`, "error medio en la salida", "yo")}${kpi(`${dec(sal.error_adif)} min`, "app oficial")}${kpi(`${sal.acierto_nuestro}%`, "salidas acertadas a ±1 min", "yo")}${kpi(`${sal.acierto_adif}%`, "app oficial")}</div>
       <p class="sub" style="margin:4px 0 0">${sal.n} salidas medidas: cuándo dijo que saldría frente a cuándo arrancó de verdad.</p>`;
-  el.innerHTML = h + apr;
+  el.innerHTML = h + tablaLineas() + apr;
 }
 
 /* ---------------------------------------------------------------- cómo funciona */
@@ -1571,6 +1578,8 @@ document.addEventListener("click", (ev) => {
   }
   const sl = ev.target.closest("#sel-lineas [data-linea]");
   if (sl) { cambiarLinea(sl.dataset.linea); return; }
+  const lp = ev.target.closest("[data-linea-prec]");
+  if (lp) { cambiarLinea(lp.dataset.lineaPrec); return; }
   const ol = ev.target.closest(".otras-lin [data-linea]");
   if (ol) { verEstacion(+$("est").value, ol.dataset.linea); return; }
   const el = ev.target.closest("[data-tren]");
