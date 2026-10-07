@@ -1,7 +1,9 @@
 "use strict";
-/* C-4 en tiempo real · interfaz web (sin dependencias salvo Leaflet para el mapa) */
+/* Cercanías Asturias en tiempo real · interfaz web (sin dependencias salvo Leaflet para el mapa) */
 
-let LINEA = null, R = null, tRecibido = 0, PREC = null, APREN = null;
+let LINEA = null, RED = null, LSEL = null, R = null, RT = null, tRecibido = 0, PREC = null, APREN = null;
+let ESTL = {};          // índice global de estación -> estación de la línea elegida (con su km en esa línea)
+let MAPA_TODAS = true;  // el mapa enseña todas las líneas (o solo la elegida)
 let tabActual = "viaje", mapa = null, capaTrenes = null, marcas = {}, cajonTren = null;
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -24,13 +26,40 @@ async function pedir(url, ms = 12000) {
   const ctl = new AbortController(), t = setTimeout(() => ctl.abort(), ms);
   try { return await (await fetch(url, { signal: ctl.signal })).json(); } finally { clearTimeout(t); }
 }
-const est = (k) => LINEA.estaciones[k];
-const nombreCorto = (n) => n.replace("Gijón-Sanz Crespo", "Gijón").replace("-Apeadero", " Apd.");
+const est = (k) => ESTL[k] || (RED && RED.estaciones[k]);
+const infoLinea = (c) => (RED && RED.lineas[c]) || { codigo: c, color: "#888", nombre: c };
+const colorLinea = (c) => infoLinea(c).color;
+const chipLinea = (c) => `<span class="chip-lin" style="background:${colorLinea(c)}">${esc(c)}</span>`;
+/* Nombre del sentido en la línea elegida: «Hacia Gijón», «Hacia Avilés / Pravia / Cudillero» */
+function nombreDir(dir) {
+  const L = infoLinea(LSEL), eje = L.eje || [];
+  if (!eje.length) return dir > 0 ? "Ida" : "Vuelta";
+  if (dir < 0) return "Hacia " + nombreCorto(est(eje[0]).nombre);
+  const ds = [];
+  for (const t of (R ? R.trenes : [])) {
+    const n = nombreCorto(t.destino);
+    if (t.dir > 0 && t.linea === LSEL && !ds.includes(n)) ds.push(n);
+  }
+  if (!ds.length) ds.push(nombreCorto(est(eje[eje.length - 1]).nombre));
+  ds.sort((a, b) => { const ka = (LINEA.estaciones.find((e) => nombreCorto(e.nombre) === a) || { km: 0 }).km,
+                             kb = (LINEA.estaciones.find((e) => nombreCorto(e.nombre) === b) || { km: 0 }).km; return ka - kb; });
+  return "Hacia " + ds.slice(-3).join(" / ");
+}
+const nombreCorto = (n) => (n || "").replace("Gijón-Sanz Crespo", "Gijón").replace("-Apeadero", " Apd.").replace(" Apeadero", " Apd.");
 const colorDir = (d) => (d > 0 ? "var(--ida)" : "var(--vta)");
+// colores de los dos sentidos: el de la línea elegida y otro que contraste con él
+let DIRCOL = null;
 const colorDirHex = (d) => {
+  if (DIRCOL) return d > 0 ? DIRCOL[0] : DIRCOL[1];
   const oscuro = matchMedia("(prefers-color-scheme: dark)").matches;
   return d > 0 ? (oscuro ? "#f25cbc" : "#d42a8f") : (oscuro ? "#60a5fa" : "#2563eb");
 };
+function coloresSentido(hex) {
+  const n = parseInt(hex.slice(1), 16), r = n >> 16, g = (n >> 8) & 255, b = n & 255;
+  const azulado = b > r && b > g * 0.8;
+  const oscuro = matchMedia("(prefers-color-scheme: dark)").matches;
+  return [hex, azulado ? (oscuro ? "#fb923c" : "#d9480f") : (oscuro ? "#60a5fa" : "#2563eb")];
+}
 function tagRetraso(min, corto) {
   if (min == null) return "";
   const r = Math.round(min);
@@ -38,6 +67,9 @@ function tagRetraso(min, corto) {
   return `<span class="tag ${r <= 5 ? "warn" : "bad"}">+${r}${corto ? "" : " min"}</span>`;
 }
 function guardar(k, v) { try { localStorage.setItem("c4." + k, JSON.stringify(v)); } catch (e) { /* sin almacenamiento */ } }
+// lo que depende de la línea se guarda por línea (o, d, estación…)
+const guardarL = (k, v) => guardar(k + "." + LSEL, v);
+const leerL = (k, def) => leer(k + "." + LSEL, def);
 function leer(k, def) { try { const v = localStorage.getItem("c4." + k); return v == null ? def : JSON.parse(v); } catch (e) { return def; } }
 function destinoCorto(t) { return nombreCorto(t.destino); }
 /* Lo que importa de un tren es a dónde va, su retraso y cuándo llega a tu estación.
@@ -54,11 +86,11 @@ function miViaje() {
 }
 
 /* ---------------------------------------------------------------- datos */
-async function cargarLinea() {
+async function cargarRed() {
   for (;;) {
     try {
-      const j = await pedir("/api/linea");
-      if (!j.cargando) { LINEA = j; return; }
+      const j = await pedir("/api/red");
+      if (!j.cargando) { RED = j; for (const c in GEO) delete GEO[c]; return; }
       $("chip-txt").textContent = "Preparando el horario…";
       $("avisos").innerHTML = j.error
         ? `<div class="aviso bad"><span>⚠</span><div><b>No se pudo cargar el horario de Renfe.</b> Se reintenta solo. (${esc(j.error)})</div></div>`
@@ -70,11 +102,55 @@ async function cargarLinea() {
     await new Promise((r) => setTimeout(r, 1500));
   }
 }
-async function cargarEstado() {
-  if (cargarEstado._en) return;            // no solapar peticiones
+async function cargarLinea() {
+  if (!RED) await cargarRed();
+  if (!LSEL || !RED.lineas[LSEL]) LSEL = leer("linea", null);
+  if (!LSEL || !RED.lineas[LSEL]) LSEL = RED.linea_defecto in RED.lineas ? RED.linea_defecto : Object.keys(RED.lineas)[0];
+  for (;;) {
+    try {
+      const j = await pedir("/api/linea?linea=" + encodeURIComponent(LSEL));
+      if (!j.cargando) { LINEA = j; break; }
+    } catch (e) { /* reintenta */ }
+    await new Promise((r) => setTimeout(r, 1500));
+  }
+  LINEA.estaciones.sort((a, b) => a.km - b.km);
+  ESTL = {};
+  for (const e of LINEA.estaciones) ESTL[e.k] = e;
+  pintarCabecera();
+}
+/* Cabecera: la línea elegida y la barra para cambiar de línea */
+function pintarCabecera() {
+  const L = infoLinea(LSEL);
+  const st = document.documentElement.style;
+  DIRCOL = coloresSentido(L.color);
+  st.setProperty("--c4", L.color); st.setProperty("--c4d", L.color);
+  st.setProperty("--ida", DIRCOL[0]); st.setProperty("--vta", DIRCOL[1]);
+  const pill = $("pill-linea");
+  pill.textContent = LSEL; pill.style.background = L.color;
+  $("titulo-linea").textContent = L.nombre;
+  document.title = `${LSEL} ${L.nombre} · Cercanías Asturias`;
+  $("sel-lineas").innerHTML = Object.values(RED.lineas).map((l) =>
+    `<button type="button" class="sl${l.codigo === LSEL ? " on" : ""}" data-linea="${esc(l.codigo)}" style="--c:${l.color}" title="${esc(l.nombre)}"><b>${esc(l.codigo)}</b><span>${esc(l.nombre)}</span></button>`).join("");
+  for (const x of document.querySelectorAll(".dir-ida")) x.textContent = nombreDir(1);
+  for (const x of document.querySelectorAll(".dir-vta")) x.textContent = nombreDir(-1);
+}
+async function cambiarLinea(c) {
+  if (c === LSEL || !RED.lineas[c]) return;
+  LSEL = c; guardar("linea", c);
+  R = null; pintarTrenesMapa._cruces = null;
+  await cargarLinea();
+  iniciarSelectores();
+  if (mapa) { pintarLineasMapa(); if (!MAPA_TODAS) vistaInicialMapa(); }
+  await cargarEstado(true);
+  pintarTodo();
+}
+async function cargarEstado(forzar) {
+  if (cargarEstado._en && !forzar) return;            // no solapar peticiones
   cargarEstado._en = true;
+  if (necesitaTodas()) cargarTodas();
   try {
-    const url = R && R.version ? `/api/estado?v=${encodeURIComponent(R.version)}` : "/api/estado";
+    const lin = encodeURIComponent(LSEL || "");
+    const url = R && R.version && !forzar ? `/api/estado?lineas=${lin}&v=${encodeURIComponent(R.version)}` : `/api/estado?lineas=${lin}`;
     const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), 12000);
     const t0 = Date.now();
     let resp;
@@ -91,7 +167,8 @@ async function cargarEstado() {
     if (j.sin_cambios) { tRecibido = Date.now(); return; }   // nada nuevo: la respuesta pesa unos bytes
     if (j.cargando) { $("chip-txt").textContent = "Leyendo el tiempo real…"; return; }
     if (R && j.ts && R.ts && j.ts < R.ts) return;  // copia guardada más vieja que lo que ya tenemos
-    if (LINEA && j.fecha && j.fecha !== LINEA.fecha) { await cargarLinea(); iniciarSelectores(); }
+    if (LINEA && j.fecha && j.fecha !== LINEA.fecha) { RED = null; await cargarLinea(); iniciarSelectores(); }
+    if (j.lineas_pedidas && j.lineas_pedidas !== LSEL) return;   // respuesta de otra línea (se cambió mientras tanto)
     R = j; tRecibido = Date.now();
     pintarTrenesMapa._cruces = null;
     pintarTodo();
@@ -100,6 +177,26 @@ async function cargarEstado() {
     $("chip-txt").textContent = R ? "Reconectando…" : "Despertando el servidor…";
     if (R) pintarEstado();
   } finally { cargarEstado._en = false; }
+}
+/* Todas las líneas a la vez: para el mapa y para ver los transbordos en el panel de estación */
+function necesitaTodas() {
+  if (!RED) return false;
+  if (tabActual === "mapa") return MAPA_TODAS;
+  if (tabActual === "estacion") { const e = RED.estaciones[+$("est").value]; return !!e && e.lineas.some((l) => l !== LSEL); }
+  return false;
+}
+async function cargarTodas() {
+  if (cargarTodas._en) return;
+  cargarTodas._en = true;
+  try {
+    const url = RT && RT.version ? `/api/estado?lineas=todas&v=${encodeURIComponent(RT.version)}` : "/api/estado?lineas=todas";
+    const j = await pedir(url, 12000);
+    if (j.sin_cambios || j.cargando) return;
+    RT = j;
+    pintarTrenesMapa._cruces = null;
+    if (tabActual === "mapa") pintarTrenesMapa();
+    if (tabActual === "estacion" && R) pintarEstacion();
+  } catch (e) { /* el mapa sigue con lo que tenía */ } finally { cargarTodas._en = false; }
 }
 async function cargarPrecision() {
   try {
@@ -142,10 +239,17 @@ function iniciarSelectores() {
   const opts = (corto) => LINEA.estaciones.map((e) => `<option value="${e.k}">${esc(corto ? nombreCorto(e.nombre) : e.nombre)}</option>`).join("");
   $("o").innerHTML = $("d").innerHTML = opts(true);
   $("est").innerHTML = opts(false);
-  const buscar = (n) => (LINEA.estaciones.find((e) => e.nombre.toLowerCase().includes(n)) || LINEA.estaciones[0]).k;
-  $("o").value = leer("o", buscar("xivares"));
-  $("d").value = leer("d", 0);
-  $("est").value = leer("est", buscar("veri"));
+  const E = LINEA.estaciones, porId = (id) => (E.find((e) => e.id === id) || {}).k;
+  // Antes (solo C-4) se guardaba el número de orden de la estación en la línea: se pasa a su código
+  if (LSEL === "C4" && leerL("o", null) == null && typeof leer("o", null) === "number") {
+    const viejo = (i) => (E[i] || {}).id;
+    guardarL("o", viejo(leer("o", 0))); guardarL("d", viejo(leer("d", 0))); guardarL("est", viejo(leer("est", 0)));
+  }
+  const buscar = (n) => (E.find((e) => e.nombre.toLowerCase().includes(n)) || E[0]).k;
+  const ini = { C4: ["xivares", "gij", "veri"] }[LSEL];
+  $("o").value = porId(leerL("o", null)) ?? (ini ? buscar(ini[0]) : E[E.length - 1].k);
+  $("d").value = porId(leerL("d", null)) ?? (ini ? buscar(ini[1]) : E[0].k);
+  $("est").value = porId(leerL("est", null)) ?? (ini ? buscar(ini[2]) : E[0].k);
 }
 function viajesEntre(o, d, lim = 6) {
   const now = ahora(), out = [];
@@ -163,23 +267,25 @@ const favoritos = () => leer("favs", []);
 const andarA = (k) => +leer("andar." + est(k).id, 0) || 0;
 function pintarFavoritos() {
   const o = +$("o").value, d = +$("d").value, fs = favoritos();
-  const es = fs.some((f) => f.o === est(o).id && f.d === est(d).id);
+  const es = fs.some((f) => f.o === est(o).id && f.d === est(d).id && (f.l || "C4") === LSEL);
   $("fav").textContent = es ? "★ Guardado" : "☆ Guardar trayecto";
   $("fav").classList.toggle("on", es);
+  const porId = (id) => RED.estaciones.find((e) => e.id === id);
   $("favoritos").innerHTML = fs.map((f, i) => {
-    const eo = LINEA.estaciones.find((e) => e.id === f.o), ed = LINEA.estaciones.find((e) => e.id === f.d);
+    const eo = porId(f.o), ed = porId(f.d), l = f.l || "C4";
     if (!eo || !ed) return "";
-    const act = eo.k === o && ed.k === d;
-    return `<button type="button" class="fav-chip${act ? " act" : ""}" data-fav="${i}">${esc(nombreCorto(eo.nombre))} → ${esc(nombreCorto(ed.nombre))}</button>`;
+    const act = l === LSEL && est(o).id === f.o && est(d).id === f.d;
+    return `<button type="button" class="fav-chip${act ? " act" : ""}" data-fav="${i}">${l !== LSEL ? chipLinea(l) + " " : ""}${esc(nombreCorto(eo.nombre))} → ${esc(nombreCorto(ed.nombre))}</button>`;
   }).join("");
   $("favoritos").hidden = !fs.length;
   $("andar").value = andarA(o) || "";
 }
 function alternarFavorito() {
-  const o = est(+$("o").value).id, d = est(+$("d").value).id;
+  const o = est(+$("o").value).id, d = est(+$("d").value).id, l = LSEL;
   let fs = favoritos();
-  if (fs.some((f) => f.o === o && f.d === d)) fs = fs.filter((f) => !(f.o === o && f.d === d));
-  else fs.push({ o, d });
+  const igual = (f) => f.o === o && f.d === d && (f.l || "C4") === l;
+  if (fs.some(igual)) fs = fs.filter((f) => !igual(f));
+  else fs.push({ o, d, l });
   guardar("favs", fs.slice(-6));
   pintarFavoritos();
 }
@@ -245,7 +351,7 @@ function pintarViaje() {
     const lis = antes.map((m) => `<li class="antes">Antes de tu estación: ${esc(m.texto)} (+${Math.round(m.min)} min)</li>`)
       .concat(mot.map((m) => `<li>${esc(m.texto)} (+${Math.round(m.min)} min)</li>`)).join("");
     const fia = fiabilidad(t);
-    const texto = `Voy en la C-4 hacia ${destinoCorto(t)} (sale de ${nombreCorto(est(o).nombre)} a las ${hmS(sal)}). Llego a ${nombreCorto(est(d).nombre)} sobre las ${hm(lle)}.`;
+    const texto = `Voy en la ${t.linea || LSEL} hacia ${destinoCorto(t)} (sale de ${nombreCorto(est(o).nombre)} a las ${hmS(sal)}). Llego a ${nombreCorto(est(d).nombre)} sobre las ${hm(lle)}.`;
     return `<div class="tv${destacado ? " primero" : ""}${perdido ? " perdido" : ""}" data-tren="${t.id}" data-jo="${jo}" data-jd="${jd}">
       <div class="tv-cab">
         <div>
@@ -326,15 +432,19 @@ function pintarEstacion() {
           <td>${tagEstado(t, j)}${cr ? `<br><span style="font-size:12px;color:var(--tx2)">Cruza aquí con ${elQueVa(cr.ida.id === t.id ? cr.vuelta.id : cr.ida.id)}</span>` : ""}${mot ? `<br><span style="font-size:12px;color:var(--warn)">Espera ${Math.round(mot.min)} min</span>` : ""}</td></tr>`;
       }).join("") + `</tbody></table>`;
   };
-  $("panel-estacion").innerHTML =
-    `<div><h3><span class="bola" style="background:var(--vta)"></span>Hacia Gijón</h3>${col(-1)}</div>` +
-    `<div><h3><span class="bola" style="background:var(--ida)"></span>Hacia Avilés / Pravia / Cudillero</h3>${col(1)}</div>`;
+  // en una cabecera solo se sale hacia un lado: la columna del otro sobra
+  const eje = infoLinea(LSEL).eje || [];
+  const lado = (dir) => (dir < 0 ? eje[0] === k : eje[eje.length - 1] === k) &&
+    !R.trenes.some((t) => t.dir === dir && t.k.indexOf(k) >= 0 && t.k.indexOf(k) < t.k.length - 1) ? "" :
+    `<div><h3><span class="bola" style="background:var(${dir < 0 ? "--vta" : "--ida"})"></span>${esc(nombreDir(dir))}</h3>${col(dir)}</div>`;
+  $("panel-estacion").innerHTML = lado(-1) + lado(1) + otrasLineasEstacion(k);
 }
 
 /* ---------------------------------------------------------------- posición de los trenes */
 function kmTren(t, now) {
   if (t.fin || t.cancelado) return null;
-  const n = t.k.length, km = (j) => est(t.k[j]).km;
+  // km a lo largo del RECORRIDO de este tren (siempre creciente, sea cual sea su sentido o línea)
+  const n = t.k.length, km = (j) => t.km[j];
   if (!t.con_datos && t.j0 === 0 && now < t.est_d[0]) return null; // aún no ha salido
   // el tren que hará este servicio aún viene de camino: en el mapa ya se ve ese, no hay otro en el andén
   if (t.material && t.j0 === 0 && now < t.est_d[0]) return null;
@@ -362,15 +472,49 @@ function kmTren(t, now) {
   }
   return now < t.est_a[n - 1] + 1 ? km(n - 1) : null;
 }
-function latlonKm(x) {
-  const K = LINEA.trazado_km, P = LINEA.trazado;
-  if (!K || !K.length) return null;
+/* Geometría del recorrido de cada tren, hecha con los tramos de vía de la red: así cada tren va
+   por SU vía (la C-4 por la costa, la C-5 a Laviana...) y sus km cuadran con los del servidor. */
+const distKm = (p, q) => { const dx = (q[1] - p[1]) * 111.32 * Math.cos(((p[0] + q[0]) / 2) * Math.PI / 180), dy = (q[0] - p[0]) * 110.57; return Math.hypot(dx, dy); };
+const GEO = {};
+function geoTren(t) {
+  const clave = t.id + "|" + t.k.length;
+  if (GEO[clave]) return GEO[clave];
+  const P = [], K = [];
+  for (let j = 0; j + 1 < t.k.length; j++) {
+    const a = t.k[j], b = t.k[j + 1], ea = RED.estaciones[a], eb = RED.estaciones[b];
+    let g = RED.tramos[Math.min(a, b) + "-" + Math.max(a, b)];
+    g = g ? (a < b ? g : g.slice().reverse()) : [[ea.lat, ea.lon], [eb.lat, eb.lon]];
+    // largo dibujado de este tramo, escalado a los km que tiene en el recorrido del tren
+    const parc = [0];
+    for (let i = 1; i < g.length; i++) parc.push(parc[i - 1] + distKm(g[i - 1], g[i]));
+    const tot = parc[parc.length - 1] || 1, k0 = t.km[j], dk = t.km[j + 1] - t.km[j];
+    for (let i = P.length ? 1 : 0; i < g.length; i++) { P.push(g[i]); K.push(k0 + dk * parc[i] / tot); }
+  }
+  if (!P.length) { const e = RED.estaciones[t.k[0]]; P.push([e.lat, e.lon]); K.push(t.km[0] || 0); }
+  return (GEO[clave] = { P, K });
+}
+function latlonTren(t, x) {
+  const { P, K } = geoTren(t);
   if (x <= K[0]) return P[0];
   if (x >= K[K.length - 1]) return P[P.length - 1];
   let lo = 0, hi = K.length - 1;
   while (hi - lo > 1) { const m = (lo + hi) >> 1; if (K[m] <= x) lo = m; else hi = m; }
   const f = (x - K[lo]) / Math.max(1e-9, K[hi] - K[lo]);
   return [P[lo][0] + (P[hi][0] - P[lo][0]) * f, P[lo][1] + (P[hi][1] - P[lo][1]) * f];
+}
+/* Los trenes que se ven en el mapa: todas las líneas (si está así) o solo la elegida */
+const fuenteMapa = () => (MAPA_TODAS && RT ? RT : R);
+const trenMapa = (id) => { const F = fuenteMapa(); return (F && F.trenes.find((x) => x.id === id)) || trenPorId(id); };
+/* km de un tren (de su recorrido) pasado a km de la línea elegida, para la malla */
+function kmEnLinea(t, x) {
+  for (let j = 0; j + 1 < t.k.length; j++) {
+    if (x <= t.km[j + 1] || j + 2 === t.k.length) {
+      const a = est(t.k[j]).km, b = est(t.k[j + 1]).km;
+      const f = Math.min(1, Math.max(0, (x - t.km[j]) / Math.max(1e-9, t.km[j + 1] - t.km[j])));
+      return a + (b - a) * f;
+    }
+  }
+  return est(t.k[0]).km;
 }
 // próxima parada comercial (el tren pasa sin parar por algunos apeaderos)
 function proximaJ(t) {
@@ -399,13 +543,70 @@ function tagEstado(t, j) {
 
 /* ---------------------------------------------------------------- mapa */
 let capaCruces = null, capaRuta = null, marcaYo = null, trenSel = null, seguir = false, etiquetasEst = [];
+let capaLineas = null, capaEst = null, marcaEst = {};
 const oscuroMapa = () => matchMedia("(prefers-color-scheme: dark)").matches;
+
+/* Las vías de las líneas (cada una con su color) y las estaciones. Con «todas», la elegida va encima. */
+function pintarLineasMapa() {
+  if (!mapa || !capaLineas) return;
+  capaLineas.clearLayers(); capaEst.clearLayers();
+  marcaEst = {}; etiquetasEst = [];
+  const lins = Object.values(RED.lineas).filter((l) => MAPA_TODAS || l.codigo === LSEL);
+  lins.sort((a, b) => (a.codigo === LSEL) - (b.codigo === LSEL));
+  const geo = (c) => { const [a, b] = c.split("-").map(Number), g = RED.tramos[c];
+                       return g || [[RED.estaciones[a].lat, RED.estaciones[a].lon], [RED.estaciones[b].lat, RED.estaciones[b].lon]]; };
+  const borde = oscuroMapa() ? "#0b0b0e" : "#fff", hechos = new Set();
+  for (const l of lins) for (const c of l.tramos) {
+    if (hechos.has(c)) continue;
+    hechos.add(c);
+    L.polyline(geo(c), { color: borde, weight: 10, opacity: 0.85, interactive: false, lineCap: "round", lineJoin: "round" }).addTo(capaLineas);
+  }
+  // tramos que comparten varias líneas: se dibujan algo más finos para que se vean los colores de debajo
+  const usos = {};
+  for (const l of lins) for (const c of l.tramos) usos[c] = (usos[c] || 0) + 1;
+  const dibujados = {};
+  for (const l of lins) {
+    const sel = l.codigo === LSEL;
+    for (const c of l.tramos) {
+      const n = usos[c], i = (dibujados[c] = (dibujados[c] || 0) + 1);
+      const w = n > 1 ? Math.max(2.5, 4.5 * (n - i + 1) / n + (sel ? 1 : 0)) : 4.5;
+      L.polyline(geo(c), { color: l.color, weight: w, opacity: MAPA_TODAS && !sel ? 0.85 : 1, interactive: false, lineCap: "round", lineJoin: "round" }).addTo(capaLineas);
+    }
+  }
+  const ks = new Set();
+  for (const l of lins) for (const k of [...l.eje, ...l.otros]) ks.add(k);
+  for (const k of ks) {
+    const e = RED.estaciones[k], col = colorLinea(e.lineas.includes(LSEL) ? LSEL : e.lineas[0] || LSEL);
+    const grande = e.cruce || e.lineas.length > 1;
+    const m = L.circleMarker([e.lat, e.lon], grande
+      ? { radius: 7, color: e.lineas.length > 1 ? (oscuroMapa() ? "#eee" : "#222") : col, weight: 3.5, fillColor: "#fff", fillOpacity: 1 }
+      : { radius: 4, color: col, weight: 2.5, fillColor: "#fff", fillOpacity: 1 }).addTo(capaEst);
+    m.bindTooltip(esc(nombreCorto(e.nombre)), { permanent: true, direction: "right", offset: [8, 0],
+      className: "etq-est" + (grande ? " cruce" : "") });
+    m.bindPopup(() => popupEstacion(e.k), { maxWidth: 300, minWidth: 230, autoPanPaddingTopLeft: [70, 70], autoPanPaddingBottomRight: [20, 20] });
+    m.on("popupopen", () => { m._abierto = true; }).on("popupclose", () => { m._abierto = false; });
+    marcaEst[k] = m;
+    etiquetasEst.push([Object.assign({}, e, { cruce: grande }), m]);
+  }
+  botonTodas();
+  if (mapa._loaded) { ajustarEtiquetas(); despejarEtiquetas(); }
+}
+function botonTodas() {
+  const b = $("m-todas");
+  if (b) { b.classList.toggle("on", MAPA_TODAS); b.innerHTML = MAPA_TODAS ? `☰<span class="txt-l"> Todas las líneas</span>` : `☰<span class="txt-l"> Solo ${esc(LSEL)}</span>`; }
+}
+const puntosLinea = () => {
+  const l = infoLinea(LSEL), pts = [];
+  for (const c of l.tramos || []) for (const p of RED.tramos[c] || []) pts.push(p);
+  return pts.length ? pts : LINEA.estaciones.map((e) => [e.lat, e.lon]);
+};
 
 function iniciarMapa() {
   if (mapa || !window.L) {
     if (!window.L) $("mapa").innerHTML = `<div class="vacio">No se pudo cargar el mapa (hace falta internet para los planos de OpenStreetMap).</div>`;
     return;
   }
+  MAPA_TODAS = leer("mapa_todas", true);
   mapa = L.map("mapa", { zoomControl: false, attributionControl: true, zoomSnap: 0.25, tap: true });
   L.control.zoom({ position: "bottomright" }).addTo(mapa);
   // Fondos sin clave. «Sencillo»: lienzo gris de Esri (claro u oscuro según el tema) con los nombres
@@ -426,23 +627,10 @@ function iniciarMapa() {
   L.control.layers(fondos, null, { position: "topright" }).addTo(mapa);
   mapa.on("baselayerchange", (e) => guardar("fondo", e.name));
 
-  // Vía: borde + línea para que se lea sobre cualquier fondo
-  L.polyline(LINEA.trazado, { color: oscuroMapa() ? "#0b0b0e" : "#fff", weight: 10, opacity: 0.85, interactive: false, lineCap: "round", lineJoin: "round" }).addTo(mapa);
-  L.polyline(LINEA.trazado, { color: "#e93cac", weight: 4.5, opacity: 1, interactive: false, lineCap: "round", lineJoin: "round" }).addTo(mapa);
+  capaLineas = L.layerGroup().addTo(mapa);
+  capaEst = L.layerGroup().addTo(mapa);
   capaRuta = L.layerGroup().addTo(mapa);
-
-  for (const e of LINEA.estaciones) {
-    const m = L.circleMarker([e.lat, e.lon], e.cruce
-      ? { radius: 7, color: "#e93cac", weight: 3.5, fillColor: "#fff", fillOpacity: 1 }
-      : { radius: 4, color: "#e93cac", weight: 2.5, fillColor: "#fff", fillOpacity: 1 })
-      .addTo(mapa);
-    m.bindTooltip(esc(nombreCorto(e.nombre)), { permanent: true, direction: "right", offset: [8, 0],
-      className: "etq-est" + (e.cruce ? " cruce" : "") });
-    m.bindPopup(() => popupEstacion(e.k), { maxWidth: 300, minWidth: 230, autoPanPaddingTopLeft: [70, 70], autoPanPaddingBottomRight: [20, 20] });
-    m.on("popupopen", () => { m._abierto = true; }).on("popupclose", () => { m._abierto = false; });
-    e._marca = m;
-    etiquetasEst.push([e, m]);
-  }
+  pintarLineasMapa();
   capaCruces = L.layerGroup().addTo(mapa);
   capaTrenes = L.layerGroup().addTo(mapa);
   mapa.createPane("grupos").style.zIndex = 660;
@@ -465,12 +653,12 @@ function iniciarMapa() {
 /* En el móvil la línea entera (Gijón–Cudillero, muy alargada) queda diminuta en una pantalla
    vertical: se abre encuadrando TU trayecto de «Mi viaje». En el ordenador, la línea completa. */
 function vistaInicialMapa() {
-  const o = +$("o").value, d = +$("d").value;
-  if (window.innerWidth < 600 && o !== d) {
-    const a = Math.min(o, d), b = Math.max(o, d);
-    const pts = LINEA.estaciones.slice(a, b + 1).map((e) => [e.lat, e.lon]);
+  const o = +$("o").value, d = +$("d").value, E = LINEA.estaciones;
+  const io = E.findIndex((e) => e.k === o), id = E.findIndex((e) => e.k === d);
+  if (window.innerWidth < 600 && o !== d && io >= 0 && id >= 0) {
+    const pts = E.slice(Math.min(io, id), Math.max(io, id) + 1).map((e) => [e.lat, e.lon]);
     mapa.fitBounds(L.latLngBounds(pts), { padding: [40, 40], maxZoom: 14 });
-  } else mapa.fitBounds(L.latLngBounds(LINEA.trazado), { padding: [20, 20] });
+  } else mapa.fitBounds(L.latLngBounds(puntosLinea()), { padding: [20, 20] });
 }
 
 function crearControlesMapa() {
@@ -481,6 +669,7 @@ function crearControlesMapa() {
       d.innerHTML = `<button type="button" id="m-yo" title="Mi estación más cercana">📍<span class="txt-l" id="m-yo-txt"> Cerca de mí</span></button>
         <button type="button" id="m-mio" title="Ir a mi tren (el próximo de «Mi viaje») y seguirlo">★<span class="txt-l"> Mi tren</span></button>
         <button type="button" id="m-linea" title="Ver toda la línea">↔<span class="txt-l"> Toda la línea</span></button>
+        <button type="button" id="m-todas" title="Ver todas las líneas o solo la elegida">☰<span class="txt-l"> Todas</span></button>
         <button type="button" id="m-grande" title="Ampliar mapa">⤢</button>`;
       L.DomEvent.disableClickPropagation(d);
       return d;
@@ -492,7 +681,14 @@ function crearControlesMapa() {
   ficha.hidden = true;
   $("mapa").appendChild(ficha);
   L.DomEvent.disableClickPropagation(ficha);
-  $("m-linea").onclick = () => { seguir = false; mapa.fitBounds(L.latLngBounds(LINEA.trazado), { padding: [20, 20] }); };
+  $("m-linea").onclick = () => { seguir = false; mapa.fitBounds(L.latLngBounds(puntosLinea()), { padding: [20, 20] }); };
+  botonTodas();
+  $("m-todas").onclick = () => {
+    MAPA_TODAS = !MAPA_TODAS; guardar("mapa_todas", MAPA_TODAS);
+    pintarLineasMapa(); pintarTrenesMapa._cruces = null;
+    if (MAPA_TODAS) cargarTodas();
+    pintarTrenesMapa();
+  };
   $("m-grande").onclick = () => {
     document.body.classList.toggle("mapa-grande");
     $("m-grande").textContent = document.body.classList.contains("mapa-grande") ? "✕" : "⤢";
@@ -530,12 +726,12 @@ function cercaDeMi() {
   navigator.geolocation.getCurrentPosition((pos) => {
     const yo = [pos.coords.latitude, pos.coords.longitude];
     const d = (e) => { const dx = (e.lon - yo[1]) * 81, dy = (e.lat - yo[0]) * 111; return Math.hypot(dx, dy); };
-    const e = LINEA.estaciones.reduce((a, x) => (d(x) < d(a) ? x : a));
+    const e = Object.keys(marcaEst).map((k) => RED.estaciones[k]).reduce((a, x) => (d(x) < d(a) ? x : a));
     if (!marcaYo) marcaYo = L.circleMarker(yo, { radius: 7, color: "#fff", weight: 3, fillColor: "#1a73e8", fillOpacity: 1 }).addTo(mapa);
     else marcaYo.setLatLng(yo);
     marcaYo.bindTooltip("Estás aquí");
     mapa.fitBounds(L.latLngBounds([yo, [e.lat, e.lon]]).pad(0.6), { maxZoom: 15 });
-    setTimeout(() => e._marca.openPopup(), 350);
+    setTimeout(() => marcaEst[e.k] && marcaEst[e.k].openPopup(), 350);
     txt(`${nombreCorto(e.nombre)} · ${d(e) < 1 ? Math.round(d(e) * 1000) + " m" : d(e).toFixed(1) + " km"}`);
   }, (err) => {
     txt(err.code === 1 ? "Permiso de ubicación denegado" : "No se pudo obtener la ubicación");
@@ -543,40 +739,71 @@ function cercaDeMi() {
   }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 });
 }
 
-function proximasSalidas(k, dir, n) {
+/* Próximas salidas de una estación en una lista de trenes (de una o varias líneas) */
+function salidasEn(trenes, k, filtro, n) {
   const now = ahora(), out = [];
-  for (const t of R.trenes) {
-    if (t.dir !== dir || t.fin || t.cancelado) continue;
+  for (const t of trenes || []) {
+    if (t.fin || t.cancelado || (filtro && !filtro(t))) continue;
     const j = t.k.indexOf(k);
-    if (j < 0 || !t.para[j] || t.j0 > j) continue;
-    const esFin = j === t.k.length - 1, h = esFin ? t.est_a[j] : t.est_d[j];
-    if (h == null || h < now - 0.5 || esFin) continue;
-    out.push({ t, j, h, retr: h - (t.prog_d[j]) });
+    if (j < 0 || !t.para[j] || t.j0 > j || j === t.k.length - 1) continue;
+    const h = t.est_d[j];
+    if (h == null || h < now - 0.5) continue;
+    out.push({ t, j, h, retr: h - t.prog_d[j] });
   }
   return out.sort((a, b) => a.h - b.h).slice(0, n);
 }
+function proximasSalidas(k, dir, n) { return salidasEn(R.trenes, k, (t) => t.dir === dir, n); }
 function popupEstacion(k) {
-  const e = est(k);
+  const e = RED.estaciones[k], F = fuenteMapa() || R;
   const fila = ({ t, h, retr }) => {
     const min = Math.max(0, Math.round(h - ahora()));
-    return `<tr data-tren="${t.id}" class="clic"><td class="num"><b>${hm(h)}</b></td><td>${esc(destinoCorto(t))}<br><span class="pp-sub">tren ${t.num}</span></td>
+    return `<tr data-tren="${t.id}" class="clic"><td class="num"><b>${hm(h)}</b></td><td>${chipLinea(t.linea)} ${esc(destinoCorto(t))}<br><span class="pp-sub">tren ${t.num}</span></td>
       <td class="num" style="text-align:right">${min < 60 ? min + " min" : ""}<br>${retr >= 1 ? `<span class="tag ${retr <= 5 ? "warn" : "bad"}" style="margin:0">+${Math.round(retr)}</span>` : ""}</td></tr>`;
   };
-  const col = (dir, tit, color) => {
-    const l = proximasSalidas(k, dir, 3);
+  const enLinea = e.lineas.includes(LSEL);
+  // de la línea elegida, por sentidos; de las demás que paran aquí, sus próximas salidas juntas
+  const col = (filtro, tit, color, n) => {
+    const l = salidasEn(F.trenes, k, filtro, n);
     return `<div class="pp-tit"><span class="bola" style="background:${color}"></span>${tit}</div>` +
       (l.length ? `<table class="pp-tabla">${l.map(fila).join("")}</table>` : `<div class="pp-sub" style="padding:4px 0 8px">Sin más salidas hoy</div>`);
   };
-  return `<div class="pp"><div class="pp-cab"><b>${esc(e.nombre)}</b>${e.cruce ? '<span class="tag warn" style="margin-left:6px">vía de cruce</span>' : ""}</div>
-    ${col(-1, "Hacia Gijón", "var(--vta)")}${col(1, "Hacia Avilés / Cudillero", "var(--ida)")}
-    <button type="button" class="pp-btn" onclick="$('est').value=${k};guardar('est',${k});irA('estacion')">Ver todas las salidas</button></div>`;
+  let h = "";
+  if (enLinea) {
+    h += col((t) => t.linea === LSEL && t.dir === -1, esc(nombreDir(-1)), "var(--vta)", 3);
+    h += col((t) => t.linea === LSEL && t.dir === 1, esc(nombreDir(1)), "var(--ida)", 3);
+  }
+  const otras = e.lineas.filter((l) => l !== LSEL);
+  if (otras.length && F.trenes.some((t) => otras.includes(t.linea)))
+    h += col((t) => otras.includes(t.linea), enLinea ? "Otras líneas" : "Próximas salidas", "#888", enLinea ? 4 : 6);
+  else if (otras.length && !enLinea) h += `<div class="pp-sub" style="padding:4px 0 8px">Líneas ${otras.map(chipLinea).join(" ")}</div>`;
+  const ir = enLinea ? LSEL : e.lineas[0];
+  return `<div class="pp"><div class="pp-cab"><b>${esc(e.nombre)}</b> ${e.lineas.map(chipLinea).join(" ")}${e.cruce ? '<span class="tag warn" style="margin-left:6px">vía de cruce</span>' : ""}</div>
+    ${h}
+    <button type="button" class="pp-btn" onclick="verEstacion(${k},'${esc(ir)}')">Ver todas las salidas</button></div>`;
+}
+/* Abre el panel de una estación (cambiando de línea si no es de la elegida) */
+async function verEstacion(k, lin) {
+  if (lin && lin !== LSEL) await cambiarLinea(lin);
+  $("est").value = k; guardarL("est", est(k).id); irA("estacion");
+}
+/* En el panel de estación: lo que sale de aquí en las OTRAS líneas (transbordos: Gijón, Oviedo, El Berrón...) */
+function otrasLineasEstacion(k) {
+  const e = RED.estaciones[k], otras = (e ? e.lineas : []).filter((l) => l !== LSEL);
+  if (!otras.length) return "";
+  const botones = otras.map((l) => `<button type="button" class="sl mini" data-linea="${esc(l)}" style="--c:${colorLinea(l)}"><b>${esc(l)}</b><span>${esc(infoLinea(l).nombre)}</span></button>`).join("");
+  if (!RT) { cargarTodas(); return `<div class="otras-lin"><h3>Otras líneas en ${esc(nombreCorto(e.nombre))}</h3><div class="sel-lineas">${botones}</div><div class="vacio">Cargando sus salidas…</div></div>`; }
+  const l = salidasEn(RT.trenes, k, (t) => otras.includes(t.linea), 8);
+  const filas = l.map(({ t, j, h }) => `<tr><td><span class="e">${hmS(h)}</span></td><td>${chipLinea(t.linea)} → ${esc(destinoCorto(t))} ${numT(t.num)}</td><td>${tagEstado(t, j)}</td></tr>`).join("");
+  return `<div class="otras-lin"><h3>Otras líneas en ${esc(nombreCorto(e.nombre))}</h3>` +
+    (filas ? `<table class="tabla num"><thead><tr><th>Sale</th><th>Línea y destino</th><th>Estado</th></tr></thead><tbody>${filas}</tbody></table>` : `<div class="vacio">No quedan salidas hoy.</div>`) +
+    `<div class="sel-lineas">${botones}</div></div>`;
 }
 
 function pintarCrucesMapa() {
   if (!capaCruces) return;
   capaCruces.clearLayers();
-  const now = ahora(), vistos = new Set();
-  for (const c of R.cruces || []) {  // vienen ordenados por hora: solo el próximo de cada estación
+  const now = ahora(), vistos = new Set(), F = fuenteMapa();
+  for (const c of F.cruces || []) {  // vienen ordenados por hora: solo el próximo de cada estación
     if (c.hora < now - 1 || c.hora > now + 45 || vistos.has(c.k)) continue;
     vistos.add(c.k);
     const e = est(c.k), malo = c.ida.retraso_extra > 0.5 || c.vuelta.retraso_extra > 0.5;
@@ -585,16 +812,19 @@ function pintarCrucesMapa() {
       icon: L.divIcon({ className: "", iconSize: null,
         html: `<div class="cruce-m${malo ? " malo" : ""}">⇄ ${hm(c.hora)}</div>` }),
       zIndexOffset: 200, keyboard: false,
-    }).bindTooltip(`<b>Cruce en ${esc(c.estacion)} · ${hm(c.hora)}</b><br>Se cruzan el tren ${hacia(c.ida.id)} y el tren ${hacia(c.vuelta.id)}` +
+    }).bindTooltip(`<b>Cruce en ${esc(c.estacion)} · ${hm(c.hora)}</b><br>Se cruzan el tren ${haciaM(c.ida.id)} y el tren ${haciaM(c.vuelta.id)}` +
       (malo ? `<br>Uno de los dos espera ~${Math.round(espera)} min más de lo previsto` : "") +
       (c.info === "movido" ? `<br>Cruce trasladado (en horario: ${esc(c.programado)})` : ""), { direction: "top", offset: [0, -14] })
       .addTo(capaCruces);
   }
 }
 
-function rumbo(x, dir) {
-  const a = latlonKm(x), b = latlonKm(x + 0.15 * dir), c = latlonKm(x - 0.15 * dir);
-  const p1 = mapa.latLngToLayerPoint(b ? a : c), p2 = mapa.latLngToLayerPoint(b || a);
+const haciaM = (id) => { const t = trenMapa(id); return t ? `${t.linea !== LSEL ? t.linea + " " : ""}→ ${destinoCorto(t)}` : "otro tren"; };
+// hacia dónde apunta el tren: la vía un poco más adelante en su recorrido
+function rumboTren(t, x) {
+  const K = geoTren(t).K, fin = K[K.length - 1];
+  const x2 = Math.min(fin, x + 0.15), x1 = x2 - x < 0.05 ? Math.max(K[0], x - 0.15) : x;
+  const p1 = mapa.latLngToLayerPoint(latlonTren(t, x1)), p2 = mapa.latLngToLayerPoint(latlonTren(t, x2 > x1 ? x2 : x1 + 0.001));
   return (Math.atan2(p2.y - p1.y, p2.x - p1.x) * 180) / Math.PI;
 }
 
@@ -609,14 +839,14 @@ function seleccionarTren(id) {
 function pintarFichaTren() {
   const f = $("ficha-tren");
   if (!f) return;
-  const t = trenSel && R && R.trenes.find((x) => x.id === trenSel);
+  const t = trenSel && trenMapa(trenSel), F = fuenteMapa() || R;
   if ($("mapa")) $("mapa").classList.toggle("con-ficha", !!t);   // la ficha tapa los botones de zoom
   if (!t) { f.hidden = true; f._html = null; return; }
   const j = t.parado ? Math.min(t.j0, t.k.length - 1) : proximaJ(t), sig = est(t.k[j]).nombre;
   const r = Math.round(retrasoActual(t));
-  const proxCruce = (R.cruces || []).find((c) => (c.ida.id === t.id || c.vuelta.id === t.id) && c.hora >= ahora() - 0.5);
+  const proxCruce = (F.cruces || []).find((c) => (c.ida.id === t.id || c.vuelta.id === t.id) && c.hora >= ahora() - 0.5);
   f.hidden = false;
-  const html = `<div class="ft-cab"><span class="ft-num" style="background:${colorDirHex(t.dir)}">C4</span>
+  const html = `<div class="ft-cab"><span class="ft-num" style="background:${colorLinea(t.linea)}">${esc(t.linea)}</span>
       <div><b>→ ${esc(nombreCorto(t.destino))}</b>${numT(t.num)}<div class="pp-sub">${esc(t.situacion)}</div></div>
       <button type="button" class="ft-x" id="ft-cerrar" aria-label="Cerrar">×</button></div>
     <div class="ft-datos num">
@@ -624,7 +854,7 @@ function pintarFichaTren() {
       <div><span class="pp-sub">Llega a ${esc(nombreCorto(t.destino))}</span><b>${hm(t.est_a[t.k.length - 1])}</b></div>
       <div><span class="pp-sub">Retraso</span><b>${t.con_datos ? (r > 0 ? "+" + r + " min" : "en hora") : "sin datos"}</b></div>
     </div>
-    ${proxCruce ? `<div class="ft-cruce">⇄ Cruza con ${elQueVa(proxCruce.ida.id === t.id ? proxCruce.vuelta.id : proxCruce.ida.id)} en ${esc(proxCruce.estacion)} a las ${hm(proxCruce.hora)}</div>` : ""}
+    ${proxCruce ? `<div class="ft-cruce">⇄ Cruza con el tren ${haciaM(proxCruce.ida.id === t.id ? proxCruce.vuelta.id : proxCruce.ida.id)} en ${esc(proxCruce.estacion)} a las ${hm(proxCruce.hora)}</div>` : ""}
     <div class="ft-botones"><button type="button" id="ft-seguir" class="${seguir ? "on" : ""}">${seguir ? "Siguiendo ✓" : "Seguir tren"}</button>
       <button type="button" id="ft-detalle">Recorrido completo</button></div>`;
   if (f._html === html) return;  // sin cambios: no rehacer (así no se pierden toques)
@@ -632,48 +862,46 @@ function pintarFichaTren() {
   f.innerHTML = html;
   $("ft-cerrar").onclick = () => seleccionarTren(null);
   $("ft-seguir").onclick = () => { seguir = !seguir; pintarFichaTren(); pintarTrenesMapa(); };
-  $("ft-detalle").onclick = () => abrirTren(t.id);
+  $("ft-detalle").onclick = async () => { if (t.linea !== LSEL) await cambiarLinea(t.linea); abrirTren(t.id); };
 }
 
 function pintarRutaSel(t, x) {
   capaRuta.clearLayers();
-  const fin = est(t.k[t.k.length - 1]).km;
-  const K = LINEA.trazado_km, pts = [latlonKm(x)];
-  for (let i = 0; i < K.length; i++) if ((K[i] - x) * t.dir > 0 && (fin - K[i]) * t.dir > 0) pts.push(LINEA.trazado[i]);
-  if (t.dir < 0) pts.splice(1, pts.length - 1, ...pts.slice(1).reverse());
-  pts.push(latlonKm(fin));
-  L.polyline(pts, { color: colorDirHex(t.dir), weight: 8, opacity: 0.9, interactive: false }).addTo(capaRuta);
+  const { P, K } = geoTren(t), pts = [latlonTren(t, x)], col = colorLinea(t.linea);
+  for (let i = 0; i < K.length; i++) if (K[i] > x) pts.push(P[i]);
+  L.polyline(pts, { color: col, weight: 8, opacity: 0.9, interactive: false }).addTo(capaRuta);
   for (let j = t.j0; j < t.k.length; j++) {
     if (!t.para[j]) continue;
-    const e = est(t.k[j]);
+    const e = RED.estaciones[t.k[j]];
     L.marker([e.lat, e.lon], { interactive: false, keyboard: false, icon: L.divIcon({ className: "", iconSize: null,
-      html: `<div class="hora-parada" style="border-color:${colorDirHex(t.dir)}">${hm(t.est_a[j])}</div>` }) }).addTo(capaRuta);
+      html: `<div class="hora-parada" style="border-color:${col}">${hm(t.est_a[j])}</div>` }) }).addTo(capaRuta);
   }
 }
 
 function pintarTrenesMapa() {
   if (!mapa || !R) return;
-  const now = ahora(), vivos = new Set(), vm = miViaje(), mio = vm && vm.id;
-  if (pintarTrenesMapa._cruces !== R) {  // datos nuevos (cada 15 s): cruces y ventanas de estación
+  const now = ahora(), vivos = new Set(), vm = miViaje(), mio = vm && vm.id, F = fuenteMapa();
+  if (pintarTrenesMapa._cruces !== F) {  // datos nuevos (cada 20 s): cruces y ventanas de estación
     pintarCrucesMapa();
-    pintarTrenesMapa._cruces = R;
+    pintarTrenesMapa._cruces = F;
     for (const [e, m] of etiquetasEst) if (m._abierto) m.setPopupContent(popupEstacion(e.k));
   }
   const tnow = performance.now();
-  for (const t of R.trenes) {
+  for (const t of F.trenes) {
+    if (!MAPA_TODAS && t.linea !== LSEL) continue;
     const x = posSuave(t, now, tnow);
     if (x == null) continue;
-    const ll = latlonKm(x);
+    const ll = latlonTren(t, x);
     if (!ll) continue;
     vivos.add(t.id);
     const r = Math.round(retrasoActual(t));
     const visto = t.con_datos || t.ultimo_dato != null;   // en directo, o visto hace poco
     const rc = !visto ? "gris" : r <= 0 ? "ok" : r <= 5 ? "warn" : "bad";
-    const ang = Math.round(rumbo(x, t.dir));
-    const sel = t.id === trenSel, esMio = t.id === mio;
-    const html = `<div class="tren-m ${t.dir > 0 ? "ida" : "vta"}${sel ? " sel" : ""}${esMio ? " mio" : ""}${t.con_datos ? "" : " sindatos"}">
-      <div class="tm-punto" style="background:${colorDirHex(t.dir)}"><svg class="tm-flecha" width="16" height="16" viewBox="-8 -8 16 16" aria-hidden="true"><path d="M6 0 L-4 -5 L-1.5 0 L-4 5 Z" fill="#fff"/></svg></div>
-      <div class="tm-etq">${esMio ? '<span class="tm-mio">★</span>' : ""}<b>${esMio ? `llega a ${esc(vm.a)} ${hm(vm.lle)}` : "→ " + esc(destinoCorto(t))}</b><span class="tm-r ${rc}">${visto ? (r > 0 ? "+" + r : "✓") + (t.con_datos ? "" : "?") : "?"}</span></div></div>`;
+    const ang = Math.round(rumboTren(t, x));
+    const sel = t.id === trenSel, esMio = t.id === mio, otra = t.linea !== LSEL;
+    const html = `<div class="tren-m ${t.dir > 0 ? "ida" : "vta"}${sel ? " sel" : ""}${esMio ? " mio" : ""}${t.con_datos ? "" : " sindatos"}${otra ? " otra" : ""}">
+      <div class="tm-punto" style="background:${colorLinea(t.linea)}"><svg class="tm-flecha" width="16" height="16" viewBox="-8 -8 16 16" aria-hidden="true"><path d="M6 0 L-4 -5 L-1.5 0 L-4 5 Z" fill="#fff"/></svg></div>
+      <div class="tm-etq">${esMio ? '<span class="tm-mio">★</span>' : ""}<b>${esMio ? `llega a ${esc(vm.a)} ${hm(vm.lle)}` : (MAPA_TODAS ? `<i class="tm-lin" style="color:${colorLinea(t.linea)}">${esc(t.linea)}</i> ` : "") + "→ " + esc(destinoCorto(t))}</b><span class="tm-r ${rc}">${visto ? (r > 0 ? "+" + r : "✓") + (t.con_datos ? "" : "?") : "?"}</span></div></div>`;
     let m = marcas[t.id];
     if (!m) {
       m = marcas[t.id] = L.marker(ll, { icon: L.divIcon({ html, className: "", iconSize: null }), zIndexOffset: 1000, riseOnHover: true })
@@ -709,20 +937,20 @@ function pintarTrenesMapa() {
    y se movía a más de 100 km/h durante minutos; así, casi nunca.) */
 const SUAVE = {};   // id -> {x (km mostrado), t (ms), atras (s que lleva por delante del dato)}
 const VMAX_KM_S = 0.024;
-function posSuave(t, now, tnow) {
+function posSuave(t, now, tnow) {   // km del recorrido del tren: avanzar es siempre sumar
   const obj = kmTren(t, now);
   if (obj == null) { delete SUAVE[t.id]; return null; }
   const s = SUAVE[t.id];
   // muy lejos (un dato nuevo lo sitúa kilómetros más adelante): se coloca, sin correr a 200 km/h
-  if (!s || (obj - s.x) * t.dir > 2.5 || Math.abs(obj - s.x) > 5) { SUAVE[t.id] = { x: obj, t: tnow, atras: 0 }; return obj; }
+  if (!s || obj - s.x > 2.5 || Math.abs(obj - s.x) > 5) { SUAVE[t.id] = { x: obj, t: tnow, atras: 0 }; return obj; }
   const dt = Math.max(0, Math.min(1000, tnow - s.t)) / 1000;
   s.t = tnow;
-  const dif = (obj - s.x) * t.dir;            // > 0: el tren tiene que avanzar
+  const dif = obj - s.x;            // > 0: el tren tiene que avanzar
   if (dif >= 0) {
     s.atras = 0;
     // sigue al objetivo con suavidad y nunca más rápido que un tren de verdad
     const paso = Math.min(dif, dif * (1 - Math.exp(-dt / 2)) + 0.002 * dt, VMAX_KM_S * dt);
-    s.x += paso * t.dir;
+    s.x += paso;
   } else {
     s.atras += dt;                            // por delante del dato: espera quieto
     if (-dif > 1 && s.atras > 40) { s.x = obj; s.atras = 0; }
@@ -742,15 +970,15 @@ function moverTrenes(tnow) {
   ultFrame = tnow;
   const now = ahora();
   let llSel = null;
-  for (const t of R.trenes) {
+  for (const t of fuenteMapa().trenes) {
     const m = marcas[t.id];
     if (!m) continue;
     const x = posSuave(t, now, tnow);
     if (x == null) continue;
-    const ll = latlonKm(x);
+    const ll = latlonTren(t, x);
     if (!ll) continue;
     m.setLatLng(ll);
-    girar(m, Math.round(rumbo(x, t.dir)));
+    girar(m, Math.round(rumboTren(t, x)));
     if (t.id === trenSel) llSel = ll;
   }
   // «Seguir tren»: el mapa acompaña al tren de forma continua, como un navegador
@@ -866,7 +1094,9 @@ function pintarMalla() {
   for (let i = 1; i < E.length; i++) Y.push(Y[i - 1] + Math.max(minGap, ((E[i].km - E[i - 1].km) / kmTot) * alto));
   const H = Y[Y.length - 1] + 36;
   const t0 = now - vent * 0.2, t1 = now + vent * 0.8;
-  const x = (t) => L0 + ((t - t0) / (t1 - t0)) * (W - L0 - right), y = (k) => Y[k];
+  const IDX = {};
+  E.forEach((e, i) => { IDX[e.k] = i; });
+  const x = (t) => L0 + ((t - t0) / (t1 - t0)) * (W - L0 - right), y = (k) => Y[IDX[k]] ?? Y[0];
   const yKm = (kx) => {
     if (kx <= E[0].km) return Y[0];
     for (let i = 0; i < E.length - 1; i++)
@@ -949,7 +1179,7 @@ function pintarMalla() {
       if (dj == null || dj < t0 || aj > t1) continue;
       textos.push({ prio: 4, x: (x(Math.max(aj, t0)) + x(dj)) / 2, y: y(t.k[m.j]) - 6, txt: `‖ ${Math.round(m.min)}'`, cls: "espera", fill: c, op: tenue ? 0.5 : 1, anchor: "middle", offs: [0, -11] });
     }
-    const kx = kmTren(t, now);
+    const kt = kmTren(t, now), kx = kt == null ? null : kmEnLinea(t, kt);
     if (kx != null) {
       const yy = yKm(kx);
       puntos.push(`<circle cx="${x(now)}" cy="${yy}" r="${esMio ? 6 : 4.5}" fill="${c}" stroke="var(--panel)" stroke-width="1.5"/>`);
@@ -1082,21 +1312,21 @@ function pintarPrecision() {
 function pintarInfo() {
   const cr = LINEA.estaciones.filter((e) => e.cruce);
   $("info").innerHTML = `<h2>Cómo calcula la hora de llegada</h2>
-  <p>La app oficial calcula <b>horario + retraso actual</b> y da por hecho que el retraso se mantiene igual hasta el final. En la C-4 eso falla porque es <b>vía única</b>: los trenes solo pueden cruzarse en algunas estaciones y, si el tren que viene de frente va tarde, el tuyo tiene que esperarle.</p>
+  <p>La app oficial calcula <b>horario + retraso actual</b> y da por hecho que el retraso se mantiene igual hasta el final. En la mayor parte de las Cercanías de Asturias eso falla porque hay mucha <b>vía única</b> (toda la C-4, C-5, C-6, C-7 y C-8 y tramos de la C-3): los trenes solo pueden cruzarse en algunas estaciones y, si el tren que viene de frente va tarde, el tuyo tiene que esperarle. Y donde varias líneas comparten vía (Pravia–Cudillero, El Berrón, Oviedo–Villabona…), un tren retrasado de una línea retrasa también a las otras: la app calcula toda la red junta.</p>
   <h3>Qué tiene en cuenta</h3>
   <ul>
     <li><b>Cruces.</b> Los saca del propio horario oficial: dónde coinciden dos trenes de sentido contrario. Un tren no sale del apartadero hasta que ha entrado el contrario. Si uno de los dos ya pasó la estación prevista, busca el siguiente apartadero donde pueden cruzarse.</li>
-    <li><b>Vía única en cabeceras.</b> En Cudillero, Pravia, Avilés o Gijón, un tren no sale hasta que ha llegado el que venía de frente por ese tramo.</li>
+    <li><b>Vía única en cabeceras.</b> En las cabeceras de vía única (Cudillero, Laviana, Collanzo, San Esteban…), un tren no sale hasta que ha llegado el que venía de frente por ese tramo.</li>
     <li><b>Tren de delante.</b> No se entra en un tramo mientras el tren anterior del mismo sentido no haya llegado al siguiente apartadero.</li>
     <li><b>Rotaciones.</b> El tren que sale de cabecera suele ser el que acaba de llegar. Si Renfe indica la vía, se usa para saber cuál es.</li>
     <li><b>Márgenes del horario.</b> Nunca sale antes de su hora. Si va tarde, puede recortar las esperas que ya trae el horario, y así se ve cuándo recupera tiempo.</li>
-    <li><b>Retraso por posición.</b> Para la C-4, Renfe a menudo da la posición pero no el retraso. El programa lo calcula viendo cuándo sale de cada estación. Ojo: cuando Renfe dice «en tránsito a X», el tren <i>acaba de salir</i> de X (comprobado en directo); solo «llegando a Y» significa que va a entrar en Y.</li>
+    <li><b>Retraso por posición.</b> En las líneas de ancho métrico (antigua FEVE), Renfe a menudo da la posición pero no el retraso. El programa lo calcula viendo cuándo sale de cada estación. Ojo: cuando Renfe dice «en tránsito a X», el tren <i>acaba de salir</i> de X (comprobado en directo); solo «llegando a Y» significa que va a entrar en Y.</li>
     <li><b>GPS del tren.</b> Si Renfe da la posición real del tren entre dos estaciones, se proyecta sobre la vía para saber cuánto le queda (con arranque y frenada). Se descartan las coordenadas que en realidad son las de una estación y los saltos hacia atrás.</li>
     <li><b>Holgura del horario.</b> En marcha, un tren no tarda mucho más de lo que le permite la vía: si el horario da más tiempo del necesario, lo recupera y espera en la siguiente estación.</li>
     <li><b>Aprendizaje.</b> Con el tiempo sustituye los tiempos teóricos entre estaciones por los que observa de verdad, aprende cuánto dura cada parada y el retraso habitual de cada tren, y corrige las estaciones donde se equivoca siempre en el mismo sentido.</li>
     <li><b>Lejos, prudencia.</b> A más de 5 minutos, si no hay un cruce que lo explique, mezcla lo calculado con «horario + retraso»: medido con datos reales, así se equivoca menos.</li>
   </ul>
-  <h3>Estaciones con vía de cruce (deducidas del horario de hoy)</h3>
+  <h3>Estaciones con vía de cruce en la ${esc(LSEL)} (deducidas del horario de hoy)</h3>
   <p>${cr.map((e) => `<span class="tag gris" style="margin:0 6px 6px 0">${esc(e.nombre)}${e.cruces_dia ? ` · ${e.cruces_dia}` : ""}</span>`).join("")}</p>
   <h3>Límites</h3>
   <ul>
@@ -1145,7 +1375,7 @@ function pintarCajon() {
   $("cajon").innerHTML = `<div class="cajon-cab"><div><h2>→ ${esc(destinoCorto(t))} ${numT(t.num)}</h2>
       <div style="color:var(--tx2)">${esc(t.origen)} → ${esc(t.destino)}</div></div>
       <button class="cerrar" id="cerrar" aria-label="Cerrar">×</button></div>
-    <div class="datos"><span class="tag ${t.dir > 0 ? "ida" : "vta"}" style="margin:0">${t.dir > 0 ? "Hacia Cudillero/Avilés" : "Hacia Gijón"}</span>
+    <div class="datos">${chipLinea(t.linea || LSEL)}<span class="tag ${t.dir > 0 ? "ida" : "vta"}" style="margin:0">${esc(t.linea === LSEL ? nombreDir(t.dir) : "→ " + destinoCorto(t))}</span>
       ${(t.con_datos || t.ultimo_dato != null) ? tagEstado(t, Math.min(t.j0, t.k.length - 1)).replace('class="tag', 'style="margin:0" class="tag') : '<span class="tag gris" style="margin:0">Sin datos en tiempo real</span>'}
       ${t.via ? `<span class="tag gris" style="margin:0">Vía ${esc(t.via)}</span>` : ""}
       <span class="tag gris" style="margin:0">Fuente: ${esc(t.fuente)}</span></div>
@@ -1176,9 +1406,9 @@ function pintarInicio() {
   const prox = (R.cruces || []).find((c) => c.hora >= R.ahora - 1);
   let h = `<div class="dash">`;
   h += `<div class="hero hero-${cls}">
-      <div class="hero-top"><span class="pill-linea">C4</span>
+      <div class="hero-top"><span class="pill-linea" style="background:${colorLinea(LSEL)}">${esc(LSEL)}</span>
         <div><div class="hero-tit">${R.calidad === "directo" && !viejo ? "Línea en directo" : esc(lbl)}</div>
-        <div class="hero-sub">Gijón – Cudillero${R.actualizado ? " · actualizado " + esc(R.actualizado.slice(0, 5)) : ""}</div></div>
+        <div class="hero-sub">${esc(infoLinea(LSEL).nombre)}${R.actualizado ? " · actualizado " + esc(R.actualizado.slice(0, 5)) : ""}</div></div>
         <span class="hero-dot"></span></div>
       <div class="hero-kpis">
         <div class="hk"><div class="hk-n num">${R.en_circulacion || 0}</div><div class="hk-l">trenes en circulación</div></div>
@@ -1236,7 +1466,7 @@ function tarjetaLinea() {
     const l = ts.filter((t) => t.dir === dir).sort((a, b) => dir * (est(b.k[Math.min(b.j0, b.k.length - 1)]).km - est(a.k[Math.min(a.j0, a.k.length - 1)]).km));
     return l.length ? `<div class="al-g">${tit}</div>` + l.map(fila).join("") : "";
   };
-  const cuerpo = grupo(1, "Hacia Avilés / Pravia / Cudillero") + grupo(-1, "Hacia Gijón");
+  const cuerpo = grupo(1, nombreDir(1)) + grupo(-1, nombreDir(-1));
   return `<div class="card"><div class="card-cab"><h3>Ahora en la línea</h3><button class="link" onclick="irA('mapa')">Mapa ›</button></div>` +
     (cuerpo || `<div class="vacio">Ahora mismo no hay trenes circulando con datos en directo.</div>`) + `</div>`;
 }
@@ -1296,6 +1526,7 @@ function irA(tab) {
     setTimeout(() => { if (mapa) { mapa.invalidateSize(); if (nuevo) vistaInicialMapa(); pintarTrenesMapa(); } }, 60);
   }
   if (tab === "precision") cargarPrecision();
+  if (necesitaTodas()) cargarTodas();
   pintarTodo();
 }
 function pintarTodo() {
@@ -1317,17 +1548,24 @@ document.addEventListener("click", (ev) => {
   const fav = ev.target.closest("[data-fav]");
   if (fav) {
     const f = favoritos()[+fav.dataset.fav];
-    const eo = LINEA.estaciones.find((e) => e.id === f.o), ed = LINEA.estaciones.find((e) => e.id === f.d);
-    if (eo && ed) { $("o").value = eo.k; $("d").value = ed.k; $("o").onchange(); }
+    (async () => {
+      if ((f.l || "C4") !== LSEL) await cambiarLinea(f.l || "C4");
+      const eo = LINEA.estaciones.find((e) => e.id === f.o), ed = LINEA.estaciones.find((e) => e.id === f.d);
+      if (eo && ed) { $("o").value = eo.k; $("d").value = ed.k; $("o").onchange(); }
+    })();
     return;
   }
+  const sl = ev.target.closest("#sel-lineas [data-linea]");
+  if (sl) { cambiarLinea(sl.dataset.linea); return; }
+  const ol = ev.target.closest(".otras-lin [data-linea]");
+  if (ol) { verEstacion(+$("est").value, ol.dataset.linea); return; }
   const el = ev.target.closest("[data-tren]");
   if (el && !ev.target.closest("#cajon")) abrirTren(el.dataset.tren, el.dataset.jo, el.dataset.jd);
 });
 $("velo").onclick = cerrarTren;
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") cerrarTren(); });
 for (const b of document.querySelectorAll("nav.tabs button")) b.onclick = () => irA(b.dataset.tab);
-$("o").onchange = $("d").onchange = () => { guardar("o", +$("o").value); guardar("d", +$("d").value); pintarViaje(); };
+$("o").onchange = $("d").onchange = () => { guardarL("o", est(+$("o").value).id); guardarL("d", est(+$("d").value).id); pintarViaje(); };
 $("fav").onclick = alternarFavorito;
 $("andar").onchange = $("andar").oninput = () => {
   const v = Math.max(0, Math.min(90, Math.round(+$("andar").value || 0)));
@@ -1335,7 +1573,7 @@ $("andar").onchange = $("andar").oninput = () => {
   pintarViaje();
 };
 $("invertir").onclick = () => { const a = $("o").value; $("o").value = $("d").value; $("d").value = a; $("o").onchange(); };
-$("est").onchange = () => { guardar("est", +$("est").value); pintarEstacion(); };
+$("est").onchange = () => { guardarL("est", est(+$("est").value).id); if (necesitaTodas()) cargarTodas(); pintarEstacion(); };
 $("ver-prog").onchange = pintarMalla;
 $("ver-mio").checked = leer("malla.mio", true);
 $("ver-mio").onchange = () => { guardar("malla.mio", $("ver-mio").checked); pintarMalla(); };
@@ -1451,7 +1689,7 @@ function guardarReciente(o, d) {
 function pintarRecientes() {
   const r = leer("ir.recientes", []);
   const cont = $("ir-ejemplos");
-  const lista = r.length ? r : [{ o: "EPI Gijón", d: "Candás" }, { o: "Hospital de Cabueñes", d: "Xivares" }, { o: "Candás", d: "Universidad Laboral" }];
+  const lista = r.length ? r : [{ o: "EPI Gijón", d: "Candás" }, { o: "Hospital de Cabueñes", d: "Xivares" }, { o: "Candás", d: "Oviedo" }];
   const corto = (x) => x === MI_UBIC ? "📍 Aquí" : x.replace(/ \((estación|parada de bus)\)$/, "").split(" · ")[0];
   cont.innerHTML = (r.length ? `<span class="ir-ej-t">Recientes</span>` : `<span class="ir-ej-t">Ejemplos</span>`) +
     lista.map((x, i) => `<button type="button" data-i="${i}">${esc(corto(x.o))} → ${esc(corto(x.d))}</button>`).join("");
@@ -1494,9 +1732,13 @@ function pintarPlan(p) {
       h += `<li class="et bus"><span class="et-ico">🚌</span><div class="et-cuerpo">
         <div class="et-t"><span class="bus-chip" style="background:${esc(e.color)}">${esc(e.linea)}</span> hacia ${esc(e.destino)} ${sale}</div>
         <div class="et-sub">Sube en <b>${esc(e.subir)}</b> · baja en <b>${esc(e.bajar)}</b> · ${e.paradas} paradas (~${Math.round(e.min)} min)</div></div></li>`;
+    } else if (e.tipo === "transbordo") {
+      h += `<li class="et transbordo"><span class="et-ico">⇄</span><div class="et-cuerpo">
+        <div class="et-t">Transbordo en ${esc(nombreCorto(e.estacion))} a la ${chipLinea(e.linea)}</div>
+        <div class="et-sub">${e.espera >= 1 ? `Esperas ${Math.round(e.espera)} min · ` : ""}sale a las <b class="num">${esc(e.sale_hm)}</b></div></div></li>`;
     } else if (e.tipo === "tren") {
       h += `<li class="et tren"><span class="et-ico">🚆</span><div class="et-cuerpo">
-        <div class="et-t">Tren <b>C-4</b> → ${esc(nombreCorto(e.destino || ""))}${e.retraso >= 1 ? ` <span class="tag ${e.retraso <= 5 ? "warn" : "bad"}" style="margin:0 0 0 4px">+${Math.round(e.retraso)} min</span>` : ""}</div>
+        <div class="et-t">Tren ${chipLinea(e.linea || "C4")} → ${esc(nombreCorto(e.destino || ""))}${e.retraso >= 1 ? ` <span class="tag ${e.retraso <= 5 ? "warn" : "bad"}" style="margin:0 0 0 4px">+${Math.round(e.retraso)} min</span>` : ""}</div>
         <div class="et-horas num"><span>${hmS(e.sale)} <b>${esc(nombreCorto(e.desde))}</b></span><span class="et-fl">→</span><span>${hm(e.llega)} <b>${esc(nombreCorto(e.hasta))}</b></span></div>
         ${e.espera_estacion >= 3 ? `<div class="et-sub">Esperas ${Math.round(e.espera_estacion)} min en la estación</div>` : ""}
         ${(e.motivos || []).map((m) => `<div class="et-cruce">⇄ ${esc(m.texto)} <span class="et-min warn2">+${Math.round(m.min)}</span></div>`).join("")}
@@ -1506,10 +1748,10 @@ function pintarPlan(p) {
   h += `</ol>`;
   if (p.alternativas && p.alternativas.length)
     h += `<div class="ir-alt"><div class="ir-alt-t">Si no te da tiempo</div>` + p.alternativas.map((a) =>
-      `<div class="ir-alt-f num"><span>Tren de las <b>${a.sale_hm}</b>${a.retraso >= 1 && a.con_datos ? ` <span class="tag warn" style="margin:0">+${Math.round(a.retraso)}</span>` : ""}</span>
+      `<div class="ir-alt-f num"><span>${(a.lineas || []).map(chipLinea).join(" ")} <b>${a.sale_hm}</b>${a.desde && a.desde !== p.estacion_sub ? ` desde ${esc(nombreCorto(a.desde))}` : ""}${a.retraso >= 1 && a.con_datos ? ` <span class="tag warn" style="margin:0">+${Math.round(a.retraso)}</span>` : ""}</span>
         <span>${a.salir_hm ? `sal ${a.salir_hm} · ` : ""}llegas <b>${a.llega_hm}</b></span></div>`).join("") + `</div>`;
   (p.avisos || []).forEach((a) => { h += `<div class="ir-aviso">${esc(a)}</div>`; });
-  h += `<p class="ir-nota">El tren lleva la hora real (con cruces en vía única) y la ruta se recalcula sola cada minuto mientras la miras. El bus urbano usa los minutos en directo de EMTUSA cuando los hay.</p>`;
+  h += `<p class="ir-nota">${p.transbordos ? "Los transbordos se cuentan con la hora REAL a la que llega el primer tren (mínimo 3 min para cambiar). " : ""}El tren lleva la hora real (con cruces en vía única) y la ruta se recalcula sola cada minuto mientras la miras. El bus urbano usa los minutos en directo de EMTUSA cuando los hay.</p>`;
   box.innerHTML = h;
 }
 

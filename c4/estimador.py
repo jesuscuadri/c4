@@ -104,11 +104,11 @@ class Estimador:
             if vref and not (ja + 1 == jb and self._aprendido(v, ja)):
                 # holgura del horario: en marcha, el tren no tarda mucho más que la distancia a
                 # velocidad normal más arrancar y frenar
-                tec = abs(L.km[v.k[jb]] - L.km[v.k[ja]]) / (vref / 60.0) + self.cfg.get("arranque_frenada_min", 0.6)
+                tec = abs(v.km[jb] - v.km[ja]) / (vref / 60.0) + self.cfg.get("arranque_frenada_min", 0.6)
                 marcha = min(marcha, tec)
             fiable = bool(arranque and arranque[1])
             gps = self._resto_por_gps(v, ja, jb, p, marcha, ahora)
-            if gps is not None and fiable and gps[1] * abs(L.km[v.k[jb]] - L.km[v.k[ja]]) < 0.15:
+            if gps is not None and fiable and gps[1] * abs(v.km[jb] - v.km[ja]) < 0.15:
                 gps = None                  # la coordenada aún es la del andén: manda la hora de arranque
             if gps is not None:             # GPS del tren: sabemos cuánto le queda de verdad
                 est, e["progreso"], e["km_gps"] = gps
@@ -147,7 +147,7 @@ class Estimador:
                 # hora a la que llegaría a la próxima parada (la vía entre medias, a su ritmo)
                 m_n = self._recorrido_teorico(v, ja, jn)
                 if vref:
-                    m_n = min(m_n, abs(L.km[v.k[jn]] - L.km[v.k[ja]]) / (vref / 60.0)
+                    m_n = min(m_n, abs(v.km[jn] - v.km[ja]) / (vref / 60.0)
                               + self.cfg.get("arranque_frenada_min", 0.6))
                 est_n = arranque[0] + m_n
             if est_n is not None and est_n < ahora - tras:
@@ -256,7 +256,7 @@ class Estimador:
         if not self.cfg.get("usar_gps", True) or p.get("lat") is None:
             return None
         L = self.L
-        ka, kb = L.km[v.k[ja]], L.km[v.k[jb]]
+        ka, kb = v.km[ja], v.km[jb]
         lo, hi = min(ka, kb), max(ka, kb)
         largo = hi - lo
         if largo < 0.2 or marcha <= 0:
@@ -269,7 +269,7 @@ class Estimador:
             return None
         if any(abs(la - c[0]) < 0.0006 and abs(lo_ - c[1]) < 0.0008 for c in L.coord):
             return None
-        pr = L.proyectar(la, lo_, lo - 0.3, hi + 0.3)
+        pr = L.proyectar_viaje(v, la, lo_, lo - 0.3, hi + 0.3) if hasattr(L, "proyectar_viaje") else L.proyectar(la, lo_, lo - 0.3, hi + 0.3)
         if not pr or pr[1] > self.cfg.get("gps_max_km", 0.4):
             return None
         x = abs(pr[0] - ka)                       # km recorridos desde la parada anterior
@@ -321,34 +321,61 @@ class Estimador:
             for ant in L.viajes.values():
                 q = rt.pos.get(ant.id)
                 if (ant is not sig and q and q.get("via") == p["via"] and q["stop"] == p["stop"]
-                        and q["estado"] != "STOPPED_AT" and ant.k[-1] == sig.k[0]):
+                        and q["estado"] != "STOPPED_AT" and ant.k[-1] == sig.k[0]
+                        and getattr(ant, "linea", "") == getattr(sig, "linea", "")):
                     out.append((ant, sig))
         return out
 
     def _rotaciones_reales(self, viajes, estados, A0):
-        """Qué tren da la vuelta en cabecera para cada salida, con las horas de llegada estimadas."""
+        """Qué tren da la vuelta en cabecera para cada salida, con las horas de llegada estimadas.
+
+        Manda la rotación del horario (el tren que llega y, unos minutos después, hace la salida).
+        Solo si ese tren llega tan tarde que no puede hacerla (más de rotacion_espera_max_min), se
+        busca otro que ya esté allí y no tenga otra salida asignada (visto el 23/09: el 70203, con
+        +30, no hizo el 70208 de las 7:56 —salió con otro tren— sino el 70306 de las 8:23). Un tren
+        que aún no ha llegado nunca «hace» una salida anterior a su llegada (visto el 07/10 en la C-2:
+        se emparejaba la salida de Oviedo de las 13:27 con el tren que llegaba a las 13:30 y los
+        retrasos se encadenaban toda la tarde)."""
         cfg = self.cfg
         vmin, esp = cfg["vuelta_minima_min"], cfg["rotacion_espera_max_min"]
-        out = []
-        cabeceras = {v.k[0] for v in viajes}
-        for K in cabeceras:
-            llegan = sorted(((A0[a.id][-1], a) for a in viajes
-                             if a.k[-1] == K and not estados[a.id]["cancelado"] and A0[a.id][-1] is not None),
-                            key=lambda x: x[0])
-            usados = set()
-            for sig in sorted((v for v in viajes if v.k[0] == K and not estados[v.id]["cancelado"]),
-                              key=lambda v: v.sd[0]):
-                for a_lleg, ant in llegan:
-                    if ant.id in usados or ant.dir == sig.dir:
-                        continue
-                    margen = min(vmin, max(2.0, sig.sd[0] - ant.sa[-1]))
-                    if a_lleg < sig.sd[0] - 90:
-                        continue            # llegó hace mucho: ese tren se habrá guardado
-                    if a_lleg + margen > sig.sd[0] + esp:
-                        break               # los que quedan llegan aún más tarde: sale con otro tren
-                    usados.add(ant.id)
-                    out.append((ant, sig, margen))
-                    break
+        linea = lambda v: getattr(v, "linea", "")  # noqa: E731
+        vivo = lambda v: not estados[v.id]["cancelado"] and A0[v.id][-1] is not None  # noqa: E731
+        estatica = {sig.id: (ant, m) for ant, sig, m in self.L.rotaciones if vivo(ant)}
+        reservado = {ant.id for ant, _ in estatica.values()}
+        out, usados = [], set()
+        for sig in sorted((v for v in viajes if not estados[v.id]["cancelado"]), key=lambda v: v.sd[0]):
+            K, sd = sig.k[0], sig.sd[0]
+
+            def libres(hasta):
+                return sorted(((A0[a.id][-1], a) for a in viajes
+                               if a.k[-1] == K and a is not sig and vivo(a) and a.id not in usados
+                               and a.id not in reservado and linea(a) == linea(sig)
+                               and sd - 180 <= A0[a.id][-1] <= hasta), key=lambda x: x[0])
+            e = estatica.get(sig.id)
+            elegido = None
+            if e and A0[e[0].id][-1] + e[1] <= sd + 0.5:
+                elegido = e                                   # el del horario llega a tiempo
+            else:
+                ya = libres(sd - 2)                           # ¿hay otro tren libre allí?
+                if ya:
+                    ant = ya[0][1]
+                    elegido = (ant, min(vmin, max(2.0, sd - ant.sa[-1])))
+                    if e:
+                        reservado.discard(e[0].id)            # el del horario queda libre para después
+                elif e and A0[e[0].id][-1] + e[1] <= sd + esp:
+                    elegido = e                               # el del horario, aunque llegue tarde
+                else:
+                    if e:
+                        reservado.discard(e[0].id)
+                    tarde = libres(sd + esp - 2)
+                    if tarde:
+                        ant = tarde[0][1]
+                        elegido = (ant, min(vmin, max(2.0, sd - ant.sa[-1])))
+            if elegido:
+                ant, m = elegido
+                out.append((ant, sig, m))
+                usados.add(ant.id)
+                reservado.discard(ant.id)
         return out
 
     # ------------------------------------------------------------------ marcha
@@ -385,7 +412,7 @@ class Estimador:
             ratio = self.cfg.get("holgura_ratio", 0) or 0
             vref = self.cfg.get("gps_vel_kmh", 0) or 0
             if ratio and vref:
-                dist = abs(self.L.km[v.k[j + 1]] - self.L.km[v.k[j]])
+                dist = abs(v.km[j + 1] - v.km[j])
                 af = self.cfg.get("arranque_frenada_min", 0.6) / 2
                 tec = dist / (vref / 60.0) + (af if v.para[j] else 0) + (af if v.para[j + 1] else 0)
                 if base > ratio * tec:
@@ -564,7 +591,10 @@ class Estimador:
             elegido, info = k, "programado"
             largo = cfg.get("cruce_mover_si_espera_min", 8)
             if pa != pb or cfg["cruces"] == "dinamicos" or largo:
-                cands = [c for c in sorted(L.apartaderos)
+                # solo apartaderos del tramo de vía única que comparten (en la red, dos trenes pueden
+                # tener más estaciones en común lejos de donde se cruzan)
+                zona = getattr(L, "corredores", {}).get((a.id, b.id))
+                cands = [c for c in (zona if zona is not None else sorted(L.apartaderos))
                          if c in a.pos and c in b.pos and not pasado(a, c) and not pasado(b, c)]
                 if not cands:
                     continue

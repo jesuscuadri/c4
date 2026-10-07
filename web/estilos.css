@@ -488,3 +488,22 @@ h2 .num-t{font-size:13px}
 
 .ce-link{color:inherit;text-decoration:none}
 .ce-lin{display:block;font-size:12px;color:var(--mut)}
+/* selector de línea (todas las Cercanías de Asturias) */
+.sel-lineas{max-width:1180px;margin:auto;padding:2px 12px 6px;display:flex;gap:6px;overflow-x:auto;scrollbar-width:none}
+.sel-lineas::-webkit-scrollbar{display:none}
+.sl{display:inline-flex;align-items:center;gap:6px;flex:0 0 auto;border:1.5px solid var(--bd);background:var(--panel);color:var(--tx2);border-radius:99px;padding:3px 10px 3px 4px;font-size:12.5px;cursor:pointer;white-space:nowrap}
+.sl b{background:var(--c);color:#fff;border-radius:99px;padding:1px 7px;font-size:12px;font-weight:800}
+.sl span{max-width:170px;overflow:hidden;text-overflow:ellipsis}
+.sl.on{border-color:var(--c);color:var(--tx);background:color-mix(in srgb,var(--c) 10%,var(--panel));font-weight:600}
+.sl:not(.on) span{display:none}
+@media (min-width:900px){.sl:not(.on) span{display:inline}}
+.sl.mini span{display:inline}
+.chip-lin{display:inline-block;color:#fff;font-weight:800;font-size:10.5px;border-radius:5px;padding:0 5px;line-height:16px;vertical-align:1px}
+.otras-lin{grid-column:1/-1}
+.otras-lin h3{font-size:14px;margin:6px 0 8px}
+.otras-lin .sel-lineas{padding:8px 0 0;flex-wrap:wrap}
+.tm-lin{font-style:normal;font-weight:800;margin-right:1px}
+.tren-m.otra .tm-etq{opacity:.85}
+.tren-m.otra .tm-punto{width:18px;height:18px;left:-9px;top:-9px}
+#m-todas.on{color:var(--c4)}
+.et.transbordo .et-ico{background:var(--warnbg);border-color:color-mix(in srgb,var(--warn) 45%,var(--bd));color:var(--warn);font-weight:800}

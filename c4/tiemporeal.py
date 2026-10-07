@@ -36,6 +36,7 @@ class TiempoReal:
         self.pos = {}           # trip_id -> {stop, estado, ts, lat, lon, via}
         self.act = {}           # trip_id -> {retraso, stop, hora, cancelado}
         self.avisos = []
+        self.avisos_detalle = []
         self.ts_consulta = None  # cuándo leímos nosotros
         self.ts_feed = None      # marca de tiempo que pone Renfe en el fichero
         self.error = None
@@ -169,21 +170,27 @@ class TiempoReal:
                         "hora": ahora_min(int(hora)) if hora else None,
                         "cancelado": (tu.get("trip") or {}).get("scheduleRelationship") == "CANCELED"}
         self.pos, self.act = pos, act
-        self.avisos = self._avisos(avisos, rutas, paradas, ahora_ts) if avisos else []
+        self.avisos_detalle = self._avisos(avisos, rutas, paradas, ahora_ts, detalle=True) if avisos else []
+        self.avisos = [a["texto"] for a in self.avisos_detalle]
         self.ts_consulta = ahora_ts
         self.error = None
 
     @staticmethod
-    def _avisos(avisos, rutas, paradas, ahora_ts):
+    def _avisos(avisos, rutas, paradas, ahora_ts, detalle=False):
         rutas = {r.strip() for r in rutas}
         paradas = set(paradas)
         out = []
         for e in avisos.get("entity", []):
             al = e.get("alert") or {}
             afecta = False
+            sus_rutas, sus_paradas = set(), set()
             for ie in al.get("informedEntity", []) or []:
                 if (ie.get("routeId") or "").strip() in rutas or ie.get("stopId") in paradas:
                     afecta = True
+                    if ie.get("routeId"):
+                        sus_rutas.add(ie["routeId"].strip())
+                    if ie.get("stopId"):
+                        sus_paradas.add(ie["stopId"])
             if not afecta:
                 continue
             activo = False
@@ -199,7 +206,8 @@ class TiempoReal:
             if txt is None and textos:
                 txt = textos[0].get("text")
             if txt:
-                out.append(txt.strip())
+                out.append({"texto": txt.strip(), "rutas": sorted(sus_rutas), "paradas": sorted(sus_paradas)}
+                           if detalle else txt.strip())
         return out
 
     # ------------------------------------------------------------------

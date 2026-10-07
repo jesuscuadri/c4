@@ -19,10 +19,11 @@ from .estimador import Estimador
 from .historial import (Precision, aprender_paradas, aprender_salidas, aprender_sesgos, aprender_tiempos,
                         guardar_observaciones, guardar_resumen, resumen)
 from .linea import Linea
+from .red import Red
 from .tiemporeal import TiempoReal
 from .emtusa import Emtusa
 from .persistencia import Almacen, ciclo_guardado
-from .util import RAIZ, WEB, http_get, ahora_min
+from .util import RAIZ, WEB, http_get, ahora_min, distancia_km
 
 VERSION = "2.2"
 
@@ -33,6 +34,7 @@ class App:
         self.lock = threading.Lock()
         self.dia = None
         self.linea = None
+        self.estaciones_plan = None
         self.est = None
         self.rt = None
         self.res = None
@@ -40,6 +42,10 @@ class App:
         self._version = 0
         self._arranque = int(time.time())
         self.linea_json = None
+        self.red_json = None
+        self.redes = {}
+        self.estaciones = []
+        self._estado_cache = {}
         self.precision = Precision()
         self.aprendidos = {}
         self.sesgos = {}
@@ -65,55 +71,175 @@ class App:
         hoy = date.today()
         if self.dia == hoy:
             return
-        datos = gtfs.extraer(self.cfg, hoy)
-        linea = Linea(self.cfg, datos)
+        datos = gtfs.extraer_red(self.cfg, hoy)
         self.aprender()
+        redes = {}
+        for nombre, conf in self.cfg["redes"].items():
+            dg = gtfs.separar_por_grupo(datos, set(conf["lineas"]))
+            if not dg["viajes"]:
+                continue
+            cfg_r = dict(self.cfg)
+            cfg_r["via_doble_si_coinciden"] = conf.get("via_doble_si_coinciden", 3)
+            red = Red(cfg_r, dg)
+            est = Estimador(red, cfg_r, self.aprendidos, self.sesgos, self.salidas)
+            est.paradas = self.paradas
+            redes[nombre] = {"red": red, "est": est, "cfg": cfg_r}
+            print("Red %s · %d estaciones · %d trenes · vía doble en %d de %d tramos · cruces en: %s" % (
+                nombre, len(red.est), len(red.viajes), len(red.doble), len(red.tramos),
+                ", ".join(sorted(red.nombre[k] for k in red.apartaderos))))
+        # Estaciones de toda Asturias, una sola vez aunque estén en las dos redes (Gijón, Oviedo...):
+        # los trenes se mandan con el índice de esta lista
+        estaciones, glob = [], {}
+        for nombre, r in redes.items():
+            red = r["red"]
+            r["glob"] = []
+            for k, s in enumerate(red.est):
+                if s not in glob:
+                    glob[s] = len(estaciones)
+                    estaciones.append({"k": glob[s], "id": s, "nombre": red.nombre[k],
+                                       "lat": red.coord[k][0], "lon": red.coord[k][1],
+                                       "lineas": set(), "cruce": False, "redes": []})
+                g = estaciones[glob[s]]
+                g["redes"].append(nombre)
+                g["cruce"] = g["cruce"] or k in red.apartaderos
+                r["glob"].append(glob[s])
+            for v in red.viajes.values():
+                for k in v.k:
+                    estaciones[r["glob"][k]]["lineas"].add(v.linea)
+        for e in estaciones:
+            e["lineas"] = sorted(e["lineas"], key=_orden_linea)
         with self.lock:
-            self.linea = linea
-            self.est = Estimador(linea, self.cfg, self.aprendidos, self.sesgos, self.salidas)
-            self.est.paradas = self.paradas
+            self.redes = redes
+            self.estaciones = estaciones
+            self.glob = glob
+            # compatibilidad: «la línea» (planificador, mañana...) es la red de la línea principal
+            principal = next((r for r in redes.values() if self.cfg["linea"] in r["red"].ejes),
+                             next(iter(redes.values())))
+            self.linea, self.est = principal["red"], principal["est"]
             self.rt = TiempoReal(self.cfg)
             self.precision = Precision()
             self.dia = hoy
+            self.estaciones_plan = planificador.Estaciones(estaciones)
+            self.red_json = self._red_json()
             self.linea_json = self._linea_json()
-        print("Línea %s · %s · %d estaciones · %d trenes hoy" % (
-            self.cfg["linea"], hoy.strftime("%d/%m/%Y"), len(linea.est), len(linea.viajes)))
-        print("Estaciones con cruce: " + ", ".join(linea.nombre[k] for k in sorted(linea.apartaderos)))
+            self._estado_cache = {}
+        print("Asturias · %s · %d estaciones · %d trenes hoy" % (
+            hoy.strftime("%d/%m/%Y"), len(estaciones), sum(len(r["red"].viajes) for r in redes.values())))
 
-    def _linea_json(self):
-        L = self.linea
+    def _red_json(self):
+        """Lo fijo del día para la interfaz: estaciones, líneas (con su eje y los tramos que usan) y
+        la geometría de cada tramo (para dibujar las líneas y mover los trenes por la vía)."""
+        lineas, tramos = {}, {}
+        for nombre, r in self.redes.items():
+            red, G = r["red"], r["glob"]
+            for (a, b), geo in red.geo_tramo.items():
+                if a < b:
+                    tramos["%d-%d" % (G[a], G[b])] = [[round(x, 5), round(y, 5)] for x, y in _simplificar(geo, 0.004)]
+            for lin, eje in red.ejes.items():
+                nodos = eje["nodos"]
+                usados = []
+                vistos = set()
+                for v in red.viajes.values():
+                    if v.linea != lin:
+                        continue
+                    for x, y in zip(v.k, v.k[1:]):
+                        c = (min(G[x], G[y]), max(G[x], G[y]))
+                        if c not in vistos:
+                            vistos.add(c)
+                            usados.append("%d-%d" % c)
+                lineas[lin] = {
+                    "codigo": lin, "red": nombre, "color": self.cfg.get("colores_lineas", {}).get(lin, "#888888"),
+                    "nombre": "%s – %s" % (_corto(red.nombre[nodos[0]]), _corto(red.nombre[nodos[-1]])),
+                    "eje": [G[k] for k in nodos], "eje_km": [round(x, 3) for x in eje["km"]],
+                    "otros": [G[k] for k in eje["otros"]], "tramos": usados,
+                    "n_trenes": sum(1 for v in red.viajes.values() if v.linea == lin),
+                    "cruces": sorted({G[k] for k in red.apartaderos if k in set(nodos) | set(eje["otros"])}),
+                    "doble": sorted("%d-%d" % (min(G[a], G[b]), max(G[a], G[b])) for a, b in red.doble
+                                    if (min(G[a], G[b]), max(G[a], G[b])) in vistos),
+                }
+        return {"version": VERSION, "fecha": self.dia.isoformat(), "linea_defecto": self.cfg["linea"],
+                "lineas": dict(sorted(lineas.items(), key=lambda kv: _orden_linea(kv[0]))),
+                "estaciones": self.estaciones, "tramos": tramos, "url_movil": self.url_movil}
+
+    def _linea_json(self, codigo=None):
+        """Una línea como la veía la app cuando solo había la C-4: estaciones del eje con sus km."""
+        codigo = codigo or self.cfg["linea"]
+        info = self.red_json["lineas"].get(codigo)
+        if not info:
+            return None
+        r = self.redes[info["red"]]
+        red = r["red"]
+        eje = red.ejes[codigo]
+        kmn = dict(zip(eje["nodos"], eje["km"]))
+        # estaciones fuera del eje (ramales): km del punto del eje más cercano
+        for k in eje["otros"]:
+            kmn[k] = min(eje["nodos"], key=lambda n: distancia_km(red.coord[n], red.coord[k]))
+            kmn[k] = dict(zip(eje["nodos"], eje["km"]))[kmn[k]] + distancia_km(red.coord[kmn[k]], red.coord[k])
+        ks = list(eje["nodos"]) + list(eje["otros"])
         return {
-            "linea": self.cfg["linea"], "version": VERSION, "fecha": self.dia.isoformat(),
-            "estaciones": [{"k": k, "id": L.est[k], "nombre": L.nombre[k], "km": round(L.km[k], 3),
-                            "lat": L.coord[k][0], "lon": L.coord[k][1], "cruce": k in L.apartaderos,
-                            "cruces_dia": L.cuenta_cruces.get(k, 0)}
-                           for k in range(len(L.est))],
-            "trazado": [[round(a, 6), round(b, 6)] for a, b in L.trazado],
-            "trazado_km": [round(x, 4) for x in L.trazado_km],
-            "n_trenes": len(L.viajes),
+            "linea": codigo, "version": VERSION, "fecha": self.dia.isoformat(),
+            "estaciones": [{"k": r["glob"][k], "id": red.est[k], "nombre": red.nombre[k], "km": round(kmn.get(k, 0.0), 3),
+                            "lat": red.coord[k][0], "lon": red.coord[k][1], "cruce": k in red.apartaderos,
+                            "cruces_dia": red.cuenta_cruces.get(k, 0)} for k in ks],
+            "trazado": self._trazado_eje(codigo),
+            "trazado_km": None,
+            "n_trenes": info["n_trenes"],
             "url_movil": self.url_movil,
         }
 
+    def _trazado_eje(self, codigo):
+        info = self.red_json["lineas"][codigo]
+        eje = info["eje"]
+        trz = []
+        for a, b in zip(eje, eje[1:]):
+            g = self.red_json["tramos"].get("%d-%d" % (min(a, b), max(a, b)))
+            if not g:
+                continue
+            g = g if a < b else g[::-1]
+            trz.extend(g if not trz else g[1:])
+        return trz
+
     def ciclo(self):
         self.preparar()
-        L = self.linea
-        ok = self.rt.consultar(lambda tid: tid in L.viajes, L.rutas, L.est)
+        todas = {}
+        for r in self.redes.values():
+            todas.update(r["red"].viajes)
+        rutas = sorted({x for r in self.redes.values() for x in r["red"].rutas})
+        paradas = sorted({e["id"] for e in self.estaciones})
+        ok = self.rt.consultar(lambda tid: tid in todas, rutas, paradas)
         if ok and self.cfg["guardar_historial"]:
             try:
-                guardar_observaciones(self.rt, L)
+                guardar_observaciones(self.rt, _Viajes(todas))
             except Exception as e:  # noqa: BLE001
                 print("Aviso (historial):", e)
         if time.time() - self.ultimo_aprendizaje > 3600:
             self.aprender()
-            self.est.aprendidos, self.est.sesgos, self.est.salidas = self.aprendidos, self.sesgos, self.salidas
-            self.est.paradas = self.paradas
+            for r in self.redes.values():
+                r["est"].aprendidos, r["est"].sesgos, r["est"].salidas = self.aprendidos, self.sesgos, self.salidas
+                r["est"].paradas = self.paradas
         calidad = self.rt.calidad()
         if calidad == "congelado":  # Renfe no actualiza: mejor el horario que datos viejos
             self.rt.pos, self.rt.act = {}, {}
-        res = self.est.calcular(self.rt)
         self.precision.observar(self.rt, guardar=self.cfg["guardar_historial"])
-        if calidad == "directo":
-            self.precision.registrar(res, L)
+        trenes, cruces, ahora = [], [], None
+        for nombre, r in self.redes.items():
+            res_r = r["est"].calcular(self.rt)
+            ahora = res_r["ahora"]
+            if calidad == "directo":
+                self.precision.registrar(res_r, r["red"])
+            G = r["glob"]
+            for t in res_r["trenes"]:
+                t["linea"] = r["red"].viajes[t["id"]].linea
+                t["km"] = [round(x, 3) for x in r["red"].viajes[t["id"]].km]
+                t["k"] = [G[k] for k in t["k"]]
+                for m in t["motivos"]:
+                    m["k"] = G[m["k"]]
+                trenes.append(t)
+            for c in res_r["cruces"]:
+                c["k"] = G[c["k"]]
+                cruces.append(c)
+        cruces.sort(key=lambda c: c["hora"])
+        res = {"ahora": ahora, "trenes": trenes, "cruces": cruces}
         res.update({
             "fecha": self.dia.isoformat(),
             "actualizado": datetime.now().strftime("%H:%M:%S"),
@@ -121,8 +247,10 @@ class App:
             "ts_feed": datetime.fromtimestamp(self.rt.ts_feed).strftime("%H:%M:%S") if self.rt.ts_feed else None,
             "error": self.rt.error,
             "avisos": self.rt.avisos,
-            "con_posicion": sum(1 for t in res["trenes"] if t["con_datos"] and not t["fin"]),
-            "en_circulacion": sum(1 for t in res["trenes"] if not t["fin"] and t["j0"] > 0 or t["parado"] and not t["fin"] and t["con_datos"]),
+            "avisos_lineas": [{"texto": a["texto"], "lineas": self._lineas_de_aviso(a)}
+                              for a in getattr(self.rt, "avisos_detalle", [])],
+            "con_posicion": sum(1 for t in trenes if t["con_datos"] and not t["fin"]),
+            "en_circulacion": sum(1 for t in trenes if not t["fin"] and t["j0"] > 0 or t["parado"] and not t["fin"] and t["con_datos"]),
             "tramos_aprendidos": len(self.aprendidos),
             "sesgos_corregidos": len(self.sesgos),
             "salidas_aprendidas": len(self.salidas),
@@ -134,6 +262,59 @@ class App:
         res["version"] = "%d-%d" % (self._arranque, self._version)   # único aunque el servidor se reinicie
         with self.lock:
             self.res = res
+            self._estado_cache = {}
+
+    def _lineas_de_aviso(self, a):
+        """A qué líneas afecta un aviso de Renfe (por sus rutas o sus estaciones)."""
+        out = set()
+        for r in a.get("rutas", []):
+            for lin in self.red_json["lineas"]:
+                if r.strip().endswith(lin):
+                    out.add(lin)
+        porid = {e["id"]: e for e in self.estaciones}
+        for s in a.get("paradas", []):
+            if s in porid:
+                out |= set(porid[s]["lineas"])
+        return sorted(out, key=_orden_linea)
+
+    def estado_filtrado(self, lineas, gz):
+        """El estado para un móvil: solo las líneas que mira y los trenes que importan ahora (los que
+        circulan y los que salen en las próximas horas). Se prepara una vez por versión y filtro."""
+        with self.lock:
+            res = self.res
+            clave = (res["version"], lineas)
+            c = self._estado_cache.get(clave)
+            if c:
+                return c
+        quiero = set(lineas.split(",")) if lineas and lineas != "todas" else None
+        ahora, vent = res["ahora"], self.cfg.get("ventana_estado_min", 240)
+        trenes = []
+        for t in res["trenes"]:
+            if quiero is not None and t["linea"] not in quiero:
+                continue
+            ini = t["est_d"][0] if t["est_d"][0] is not None else t["prog_d"][0]
+            fin = t["est_a"][-1] if t["est_a"][-1] is not None else t["prog_a"][-1]
+            if fin < ahora - 15 or ini > ahora + vent:
+                continue
+            trenes.append(t)
+        ids = {t["id"] for t in trenes}
+        cruces = [c for c in res["cruces"] if c["ida"]["id"] in ids or c["vuelta"]["id"] in ids]
+        out = dict(res, trenes=trenes, cruces=cruces, lineas_pedidas=lineas or "todas")
+        if quiero is not None:   # cuentas de la cabecera: solo las líneas pedidas
+            sel = [t for t in res["trenes"] if t["linea"] in quiero]
+            out["con_posicion"] = sum(1 for t in sel if t["con_datos"] and not t["fin"])
+            out["en_circulacion"] = sum(1 for t in sel if not t["fin"] and t["j0"] > 0
+                                        or t["parado"] and not t["fin"] and t["con_datos"])
+        if quiero is not None:
+            out["avisos"] = [a["texto"] for a in res.get("avisos_lineas", []) if not a["lineas"] or set(a["lineas"]) & quiero] \
+                if res.get("avisos_lineas") is not None else res["avisos"]
+        crudo = json.dumps(out, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        c = (crudo, gzip.compress(crudo, 5))
+        with self.lock:
+            if len(self._estado_cache) > 40:
+                self._estado_cache = {}
+            self._estado_cache[clave] = c
+        return c
 
     def aprender(self):
         """Recalcula todo lo aprendido: tiempos de marcha reales, retraso típico de cada servicio
@@ -153,14 +334,17 @@ class App:
         """Primeros trenes de mañana entre dos estaciones (para cuando ya no quedan hoy)."""
         dia = date.today() + timedelta(days=1)
         if self._manana[0] != dia:
-            self._manana = (dia, Linea(self.cfg, gtfs.extraer(self.cfg, dia)))
-        L = self._manana[1]
+            self._manana = (dia, gtfs.extraer_red(self.cfg, dia))
+        datos = self._manana[1]
         out = []
-        for v in L.viajes.values():
-            jo, jd = v.stop_j.get(o_id), v.stop_j.get(d_id)
+        for tid, filas in datos["viajes"].items():
+            pos = {s: n for n, (s, _, _) in enumerate(filas)}
+            jo, jd = pos.get(o_id), pos.get(d_id)
             if jo is not None and jd is not None and jo < jd:
-                out.append({"num": v.num, "sale": round(v.sd[jo], 2), "llega": round(v.sa[jd], 2),
-                            "destino": L.nombre[v.k[-1]]})
+                dig = "".join(c if c.isdigit() else " " for c in tid[5:]).split()
+                out.append({"num": dig[0] if dig else tid, "linea": datos["lineas"].get(tid, ""),
+                            "sale": round(filas[jo][2], 2), "llega": round(filas[jd][1], 2),
+                            "destino": datos["paradas"][filas[-1][0]][0]})
         out.sort(key=lambda x: x["sale"])
         return {"fecha": dia.isoformat(), "trenes": out[:4]}
 
@@ -170,7 +354,7 @@ class App:
             L, ap, se = self.linea, self.aprendidos, self.sesgos
         if not L:
             return {"cargando": True}
-        nom = {L.est[k]: L.nombre[k] for k in range(len(L.est))}
+        nom = {e["id"]: e["nombre"] for e in self.estaciones}
         sesgos = [{"estacion": nom.get(s, s), "min": m}
                   for s, m in sorted(se.items(), key=lambda kv: -abs(kv[1]))]
         tramos = [{"de": nom.get(a, a), "a": nom.get(b, b), "min": round(m, 1)}
@@ -185,7 +369,7 @@ class App:
 
     def geocode(self, q):
         with self.lock:
-            linea = self.linea
+            linea = self.estaciones_plan
         p = planificador.geocodificar(q, linea, self.bus)
         return p or {"error": "No encontré «%s». Prueba con el nombre de una parada, una estación o un sitio." % q}
 
@@ -197,7 +381,7 @@ class App:
                 pass
         if texto:
             with self.lock:
-                linea = self.linea
+                linea = self.estaciones_plan
             return planificador.geocodificar(texto, linea, self.bus)
         return None
 
@@ -207,7 +391,7 @@ class App:
         if not destino:
             return {"ok": False, "error": "Falta el destino.", "cual": "destino"}
         with self.lock:
-            linea, res = self.linea, self.res
+            linea, res = self.estaciones_plan, self.res
         if linea is None or res is None:
             return {"ok": False, "cargando": True}
         try:
@@ -258,6 +442,44 @@ class App:
         return max(0.3, min(falta, self.cfg.get("intervalo_rapido_s", 2) * 5))
 
 
+class _Viajes:
+    def __init__(self, viajes):
+        self.viajes = viajes
+
+
+def _orden_linea(c):
+    """C1 < C2 < … < C5 < C5a < C6 …"""
+    import re
+    m = re.match(r"[A-Za-z]*(\d+)(.*)", c or "")
+    return (int(m.group(1)), m.group(2)) if m else (999, c)
+
+
+def _simplificar(pts, tol_km):
+    """Douglas-Peucker: quita puntos que se desvían menos de tol_km de la recta (la vía se ve igual)."""
+    if len(pts) < 3:
+        return list(pts)
+    a, b = pts[0], pts[-1]
+    coslat = __import__("math").cos(__import__("math").radians(a[0]))
+    ax, ay = a[1] * 111.32 * coslat, a[0] * 110.57
+    bx, by = b[1] * 111.32 * coslat, b[0] * 110.57
+    dx, dy = bx - ax, by - ay
+    ll = dx * dx + dy * dy
+    mx, mi = -1.0, 0
+    for i in range(1, len(pts) - 1):
+        px, py = pts[i][1] * 111.32 * coslat, pts[i][0] * 110.57
+        t = 0.0 if ll <= 0 else max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / ll))
+        d = ((ax + t * dx - px) ** 2 + (ay + t * dy - py) ** 2) ** 0.5
+        if d > mx:
+            mx, mi = d, i
+    if mx <= tol_km:
+        return [a, b]
+    return _simplificar(pts[:mi + 1], tol_km)[:-1] + _simplificar(pts[mi:], tol_km)
+
+
+def _corto(nombre):
+    return (nombre or "").replace("Gijón-Sanz Crespo", "Gijón").replace(" Apeadero", "").replace("-Apeadero", "")
+
+
 def ip_local():
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -305,22 +527,27 @@ def servir(app, abrir=True, en_red=False, publico=False):
                     if not res:
                         return self._json({"cargando": True})
                     # el móvil pregunta cada pocos segundos con la versión que tiene: si no hay nada
-                    # nuevo se contesta con unos bytes; si lo hay, el estado entero (ya comprimido)
+                    # nuevo se contesta con unos bytes; si lo hay, el estado (solo de las líneas que mira)
                     # cuándo volver a preguntar: justo después de la próxima publicación de Renfe
                     sig = app.rt.proxima_publicacion() if app.rt is not None else None
                     sig_s = round(max(0.5, sig + 1.6 - time.time()), 1) if sig else None
                     if q.get("v", [""])[0] == str(res.get("version")):
                         return self._json({"sin_cambios": True, "version": res.get("version"), "sig_s": sig_s})
-                    cache = app._estado_bytes
-                    if not cache or cache[0] is not res:
-                        crudo = json.dumps(res, ensure_ascii=False).encode("utf-8")
-                        cache = app._estado_bytes = (res, crudo, gzip.compress(crudo, 5))
-                return self._enviar(cache[1], "application/json; charset=utf-8", gz=cache[2])
-            if ruta == "/api/linea":
+                lineas = q.get("lineas", [""])[0] or "todas"
+                crudo, gz = app.estado_filtrado(lineas, True)
+                return self._enviar(crudo, "application/json; charset=utf-8", gz=gz)
+            if ruta == "/api/red":
                 with app.lock:
-                    if app.linea_json:
-                        app.linea_json["url_movil"] = app.url_movil
-                    return self._json(app.linea_json or {"cargando": True, "error": app.error_inicio})
+                    if app.red_json:
+                        app.red_json["url_movil"] = app.url_movil
+                    return self._json(app.red_json or {"cargando": True, "error": app.error_inicio})
+            if ruta == "/api/linea":
+                q = parse_qs(urlparse(self.path).query)
+                with app.lock:
+                    lj = app._linea_json(q.get("linea", [""])[0] or None) if app.red_json else None
+                    if lj:
+                        lj["url_movil"] = app.url_movil
+                    return self._json(lj or {"cargando": True, "error": app.error_inicio})
             if ruta == "/api/precision":
                 return self._json(Precision.estadisticas())
             if ruta == "/api/aprendizaje":
@@ -373,7 +600,7 @@ def servir(app, abrir=True, en_red=False, publico=False):
             if ruta == "/api/sugerir":
                 q = parse_qs(urlparse(self.path).query)
                 with app.lock:
-                    linea = app.linea
+                    linea = getattr(app, "estaciones_plan", None)
                 return self._json({"sugerencias": planificador.sugerir(q.get("q", [""])[0], linea, app.bus)})
             if ruta == "/api/geocode":
                 q = parse_qs(urlparse(self.path).query)

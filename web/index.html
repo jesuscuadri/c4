@@ -7,11 +7,11 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="C-4">
+<meta name="apple-mobile-web-app-title" content="Cercanías">
 <meta name="format-detection" content="telephone=no">
 <link rel="apple-touch-icon" href="icono-180.png">
 <link rel="manifest" href="manifest.json">
-<title>C-4 en tiempo real</title>
+<title>Cercanías Asturias en tiempo real</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23e93cac'/%3E%3Ctext x='32' y='43' font-family='Arial' font-weight='700' font-size='28' fill='white' text-anchor='middle'%3EC4%3C/text%3E%3C/svg%3E">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <link rel="stylesheet" href="estilos.css">
@@ -20,8 +20,8 @@
 <header class="top">
   <div class="top-in">
     <div class="marca">
-      <span class="pill-linea">C4</span>
-      <h1>Gijón – Cudillero <small>Cercanías Asturias · llegada real con cruces en vía única</small></h1>
+      <span class="pill-linea" id="pill-linea">C4</span>
+      <h1><span id="titulo-linea">Cercanías Asturias</span> <small>Cercanías Asturias · llegada real con cruces en vía única</small></h1>
     </div>
     <div class="estado">
       <span class="chip" id="chip"><span class="dot"></span><span id="chip-txt">Cargando…</span></span>
@@ -30,6 +30,7 @@
       <span class="reloj num" id="reloj">--:--</span>
     </div>
   </div>
+  <div class="sel-lineas" id="sel-lineas" role="toolbar" aria-label="Línea"></div>
   <nav class="tabs" role="tablist">
     <button role="tab" data-tab="inicio" aria-selected="true"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11l8-7 8 7M6 9.5V20h12V9.5"/></svg><span class="l-largo">Inicio</span><span class="l-corto">Inicio</span></button>
     <button role="tab" data-tab="ir"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s7-6.2 7-11a7 7 0 1 0-14 0c0 4.8 7 11 7 11z"/><circle cx="12" cy="10" r="2.4"/></svg><span class="l-largo">Ir a…</span><span class="l-corto">Ir a…</span></button>
@@ -52,7 +53,7 @@
 
   <section id="tab-ir" hidden>
     <div class="panel">
-      <p class="sub" style="margin:0 0 12px">Dime de dónde sales y a dónde vas. Combino <b>bus urbano de Gijón + tren C-4</b> y te cuadro la conexión, con la hora de llegada real (contando las esperas de cruce del tren).</p>
+      <p class="sub" style="margin:0 0 12px">Dime de dónde sales y a dónde vas. Combino <b>bus urbano de Gijón y todos los Cercanías de Asturias</b> (con transbordos) y te cuadro la conexión, con la hora de llegada real (contando las esperas de cruce del tren).</p>
       <div class="ir-form">
         <div class="ir-campo">
           <label for="ir-o">Salgo de</label>
@@ -107,9 +108,7 @@
       <h2>Mapa en tiempo real</h2>
       <p class="sub">Los trenes se mueven cada segundo según su posición estimada. Toca un tren para ver su ruta y sus horas de paso. Toca una estación para ver sus próximas salidas.</p>
       <div id="mapa"></div>
-      <div class="leyenda">
-        <span><span class="bola" style="background:var(--ida)"></span>Hacia Avilés / Cudillero</span>
-        <span><span class="bola" style="background:var(--vta)"></span>Hacia Gijón</span>
+      <div class="leyenda" id="leyenda-mapa">
         <span><span class="bola" style="background:#fff;border:3px solid var(--c4)"></span>Estación con vía de cruce</span>
         <span><span class="cruce-m" style="position:static;transform:none">⇄ 20:31</span>Próximo cruce</span>
         <span><span class="tm-r ok">✓</span><span class="tm-r warn">+4</span><span class="tm-r bad">+9</span>retraso</span>
@@ -132,8 +131,8 @@
       </div>
       <div id="malla" class="scroll-x"></div>
       <div class="leyenda">
-        <span><svg width="26" height="8"><line x1="0" y1="4" x2="26" y2="4" stroke="var(--ida)" stroke-width="2.5"/></svg>Hacia Cudillero / Avilés</span>
-        <span><svg width="26" height="8"><line x1="0" y1="4" x2="26" y2="4" stroke="var(--vta)" stroke-width="2.5"/></svg>Hacia Gijón</span>
+        <span><svg width="26" height="8"><line x1="0" y1="4" x2="26" y2="4" stroke="var(--ida)" stroke-width="2.5"/></svg><span class="dir-ida">Ida</span></span>
+        <span><svg width="26" height="8"><line x1="0" y1="4" x2="26" y2="4" stroke="var(--vta)" stroke-width="2.5"/></svg><span class="dir-vta">Vuelta</span></span>
         <span><svg width="26" height="10"><line x1="0" y1="5" x2="26" y2="5" stroke="var(--ida)" stroke-width="8" opacity=".22"/><line x1="0" y1="5" x2="26" y2="5" stroke="var(--ida)" stroke-width="3.5"/></svg>★ Tu tren (el próximo de «Mi viaje»)</span>
         <span><svg width="26" height="8"><line x1="0" y1="4" x2="26" y2="4" stroke="var(--mut)" stroke-dasharray="3 3"/></svg>Horario oficial</span>
         <span><b style="color:var(--ida)">‖ 4'</b>Espera por cruce o vía única</span>
@@ -179,7 +178,7 @@
     <ol class="pasos">
       <li>Abre la <b>Cámara</b> del iPhone y apunta al código. Toca el enlace que aparece.</li>
       <li>En Safari, pulsa <b>Compartir</b> (el cuadrado con la flecha) → <b>Añadir a pantalla de inicio</b>.</li>
-      <li>Te queda un icono <b>C-4</b> que se abre a pantalla completa, como una app.</li>
+      <li>Te queda un icono <b>Cercanías</b> que se abre a pantalla completa, como una app.</li>
     </ol>
   </div>
 </div>

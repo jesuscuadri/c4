@@ -27,6 +27,18 @@ if DATOS:
 CONFIG_DEFECTO = {
     "linea": "C4",
     "prefijo_nucleo": "20T",            # 20 = núcleo de Asturias en el GTFS de Renfe
+    # Redes: cada ancho de vía es una red (las líneas de un mismo ancho comparten vías y cruces).
+    # «via_doble_si_coinciden»: cuántas veces tiene que hacer coincidir el horario a dos trenes de
+    # sentido contrario en mitad de un tramo para darlo por vía doble. En ancho ibérico el horario no
+    # tiene esas rarezas (1 basta); en el métrico la C-4 tiene 1-2 al día en vía única (El Parador–Soto).
+    "redes": {
+        "metrico": {"lineas": ["C4", "C5", "C5a", "C6", "C7", "C8"], "via_doble_si_coinciden": 3},
+        "iberico": {"lineas": ["C1", "C2", "C3"], "via_doble_si_coinciden": 1},
+    },
+    "colores_lineas": {"C1": "#e2231a", "C2": "#1d70b8", "C3": "#00965e", "C4": "#e93cac",
+                       "C5": "#f39200", "C5a": "#c77d00", "C6": "#7b3f98", "C7": "#00a3e0",
+                       "C8": "#8a6d3b"},
+    "ventana_estado_min": 240,          # trenes que se mandan al móvil: los que circulan y los de las próximas 4 h
     "puerto": 8765,
     "intervalo_consulta_s": 20,         # recalcular al menos cada 20 s
     "intervalo_rapido_s": 2,            # preguntar a Renfe si hay datos nuevos cada 2 s (contesta «sin cambios» casi siempre)
