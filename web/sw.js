@@ -2,7 +2,7 @@
    - Páginas y estilos: se piden a la red; si tarda más de 3 s, se usa la copia guardada.
    - Datos (/api/estado, /api/linea): igual, con 8 s; la app avisa si son datos antiguos.
    - Mapa (Leaflet): se guarda la primera vez. Las teselas del mapa no se guardan. */
-const VERSION = "c4-v61";
+const VERSION = "c4-v62";
 const BASICOS = ["/", "/index.html", "/app.js", "/estilos.css", "/manifest.json", "/icono-180.png", "/icono-192.png"];
 
 self.addEventListener("install", (e) => {
@@ -68,4 +68,26 @@ self.addEventListener("fetch", (e) => {
       return r;
     }));
   }
+});
+
+/* Avisos al móvil («tu bus sale en N minutos»): el servidor manda un mensaje cifrado y aquí se muestra. */
+self.addEventListener("push", (e) => {
+  let d = {};
+  try { d = e.data ? e.data.json() : {}; } catch (_) { d = { texto: e.data ? e.data.text() : "" }; }
+  e.waitUntil(self.registration.showNotification(d.titulo || "🚌 Es hora de salir", {
+    body: d.texto || "",
+    icon: "/icono-192.png",
+    badge: "/icono-192.png",
+    tag: d.etiqueta || "c4",
+    renotify: true,
+    data: { url: "/#ir" },
+  }));
+});
+
+self.addEventListener("notificationclick", (e) => {
+  e.notification.close();
+  e.waitUntil(self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((cs) => {
+    for (const c of cs) { if ("focus" in c) return c.focus(); }
+    return self.clients.openWindow("/#ir");
+  }));
 });

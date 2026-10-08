@@ -313,6 +313,10 @@ body.mapa-grande #mapa{flex:1;height:auto;border-radius:0;border:0}
 .et-min.aprox{background:var(--bd);color:var(--mut)}
 .et-min.warn2{background:transparent;color:var(--warn);padding:0 0 0 4px}
 .bus-chip{color:#fff;font-weight:800;border-radius:7px;padding:2px 9px;font-size:13px;letter-spacing:.3px}
+.ir-avisame{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:12px 0 0}
+.ir-avisame select{width:auto;padding:6px 28px 6px 10px;font-size:13px}
+.ir-avisame [hidden]{display:none!important}
+.avisame-e{font-size:12.5px;color:var(--tx2);font-weight:600}
 .ir-nota{color:var(--mut);font-size:12.5px;margin:14px 2px 0;line-height:1.4}
 @media (max-width:760px){
   .ir-form{grid-template-columns:1fr;gap:8px}

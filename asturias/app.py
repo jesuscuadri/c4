@@ -16,7 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .trenes import gtfs
 from .trenes import planificador
-from . import rutas
+from . import push, rutas
 from .bus import consorcio
 from .trenes.estimador import Estimador
 from .trenes.historial import (Precision, aprender_calibracion, correccion, aprender_paradas, aprender_salidas, aprender_sesgos, aprender_tiempos,
@@ -58,6 +58,7 @@ class App:
         self.salidas = {}
         self.paradas = {}
         self.almacen = Almacen()               # guarda lo aprendido fuera del servidor (GitHub)
+        self.push = push.Avisos(self.almacen)  # avisos al móvil («tu bus sale en N minutos»)
         self.ultimo_aprendizaje = 0
         self.errores_seguidos = 0
         self.url_movil = None
@@ -869,10 +870,15 @@ class App:
         if self.almacen.activo:
             self.almacen.cargar()
             threading.Thread(target=ciclo_guardado, args=(self.almacen,), daemon=True).start()
+        try:
+            self.push.cargar()
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
         ultimo = 0.0
         while True:
             try:
                 self._mantener_manana()
+                self.push.revisar()
                 # Renfe publica posiciones cada ~20 s. Se le pregunta cada pocos segundos si hay algo
                 # nuevo (normalmente contesta «sin cambios» sin mandar nada) y, en cuanto lo hay,
                 # se recalcula al momento: así lo que ves va unos segundos por detrás de Renfe, no 30-40.
@@ -989,8 +995,35 @@ def servir(app, abrir=True, en_red=False, publico=False):
         def _json(self, obj):
             self._enviar(json.dumps(obj, ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8")
 
+        def do_POST(self):
+            ruta = self.path.split("?")[0]
+            if not ruta.startswith("/api/push/"):
+                return self._enviar(b"No encontrado", "text/plain; charset=utf-8", 404)
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                if n > 8192:
+                    return self._json({"ok": False, "error": "Petición demasiado grande."})
+                cuerpo = json.loads(self.rfile.read(n).decode("utf-8") or "{}")
+            except (ValueError, UnicodeDecodeError):
+                return self._json({"ok": False, "error": "Petición no válida."})
+            if ruta == "/api/push/avisar":
+                return self._json(app.push.programar(cuerpo.get("sub"), cuerpo.get("en_min"), cuerpo.get("titulo") or "🚌 Es hora de salir",
+                                                     cuerpo.get("texto") or "", cuerpo.get("id")))
+            if ruta == "/api/push/cancelar":
+                return self._json(app.push.cancelar(str(cuerpo.get("id") or ""), str(cuerpo.get("endpoint") or "")))
+            if ruta == "/api/push/probar":
+                sub = cuerpo.get("sub")
+                if not isinstance(sub, dict) or not str(sub.get("endpoint", "")).startswith("https://") or not (sub.get("keys") or {}).get("p256dh"):
+                    return self._json({"ok": False, "error": "Suscripción no válida."})
+                return self._json(app.push.probar(sub))
+            if ruta == "/api/push/pendientes":
+                return self._json({"avisos": app.push.pendientes(str(cuerpo.get("endpoint") or ""))})
+            return self._json({"ok": False, "error": "No conozco esa petición."})
+
         def do_GET(self):
             ruta = self.path.split("?")[0]
+            if ruta == "/api/push/clave":
+                return self._json({"clave": app.push.clave.pub_b64})
             if ruta == "/api/estado":
                 q = parse_qs(urlparse(self.path).query)
                 with app.lock:

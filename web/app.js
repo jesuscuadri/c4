@@ -1896,15 +1896,114 @@ function pintarPlan(p, box) {
       </div></li>`;
     }
   }
-  h += `</ol>`;
+  h += `</ol>` + avisameHtml(p);
   if (p.alternativas && p.alternativas.length)
     h += `<div class="ir-alt"><div class="ir-alt-t">${p.es_manana ? "Los siguientes" : "Si no te da tiempo"}</div>` + p.alternativas.map((a) =>
       `<div class="ir-alt-f num"><span>${a.vehiculos ? a.vehiculos.map((v) => v.tipo === "bus" ? `<span class="bus-chip" style="background:${esc(v.color)}">${esc(v.linea)}</span>` : chipLinea(v.linea)).join(" ") : (a.lineas || []).map(chipLinea).join(" ")} <b>${a.sale_hm}</b>${a.desde && a.desde !== p.estacion_sub ? ` desde ${esc(nombreCorto(a.desde))}` : ""}${a.retraso >= 1 && a.con_datos ? ` <span class="tag warn" style="margin:0">+${Math.round(a.retraso)}</span>` : ""}</span>
         <span>${a.salir_hm ? `sal ${a.salir_hm} · ` : ""}llegas <b>${a.llega_hm}</b></span></div>`).join("") + `</div>`;
   (p.avisos || []).forEach((a) => { h += `<div class="ir-aviso">${esc(a)}</div>`; });
-  if (p.es_manana) { box.innerHTML = h + `<p class="ir-nota">Horario oficial de mañana, sin tiempo real: los trenes y autobuses pueden variar. Recuerda mirarlo otra vez mañana.</p>`; return; }
+  if (p.es_manana) { box.innerHTML = h + `<p class="ir-nota">Horario oficial de mañana, sin tiempo real: los trenes y autobuses pueden variar. Recuerda mirarlo otra vez mañana.</p>`; ligarAvisame(box, p); return; }
   h += `<p class="ir-nota">${p.transbordos ? "Los transbordos se cuentan con la hora REAL a la que llega cada tren (mínimo 3 min para cambiar de tren y 2 para coger un autobús). " : ""}El tren lleva la hora real (con cruces en vía única) y la ruta se recalcula sola cada minuto mientras la miras. ${p.con_bus ? "Los autobuses del Consorcio van con su horario oficial. " : ""}El bus urbano de Gijón usa los minutos en directo de EMTUSA cuando los hay.</p>`;
   box.innerHTML = h;
+  ligarAvisame(box, p);
+}
+
+
+/* ---------------------------------------------------------------- «🔔 Avísame»: aviso al móvil antes de salir */
+function primerVehiculo(p) {
+  let andar = 0;
+  for (const e of p.etapas || []) {
+    if (e.tipo === "andar") { andar += e.min || 0; continue; }
+    if (e.tipo === "tren") return { e, andar, linea: e.linea || "C4", desde: nombreCorto(e.desde || ""), hm: hmS(e.sale) };
+    if (e.tipo === "autobus") return { e, andar, linea: e.linea, desde: e.subir, hm: e.sale_hm };
+    if (e.tipo === "bus") return { e, andar, linea: e.linea, desde: e.subir, hm: null };
+    return null;
+  }
+  return null;
+}
+// minutos desde ahora hasta que sale el primer vehículo (con el reloj del móvil, que es el de quien lo coge)
+function minutosHastaSalida(p, v) {
+  if (v.e.tipo === "bus" && v.e.sale_en != null) return v.e.sale_en;
+  const m = /^(\d{1,2}):(\d{2})/.exec(v.hm || "");
+  if (!m) return null;
+  const n = new Date(), ahora = n.getHours() * 60 + n.getMinutes() + n.getSeconds() / 60;
+  let d = (+m[1]) * 60 + (+m[2]) - ahora;
+  if (p.es_manana) d += 1440;                  // «mañana» es siempre el día siguiente al de hoy
+  else if (d < -5) d += 1440;
+  return d;
+}
+function avisameHtml(p) {
+  const v = primerVehiculo(p);
+  if (!v || minutosHastaSalida(p, v) == null) return "";
+  const m = leer("push.margen", 10);
+  return `<div class="ir-avisame"><button type="button" class="btn-mini avisame-b">🔔 Avísame</button>
+    <select class="avisame-m" aria-label="Margen del aviso">${[5, 10, 15, 30].map((x) => `<option value="${x}"${x === m ? " selected" : ""}>${x} min de margen</option>`).join("")}</select>
+    <span class="avisame-e"></span></div>`;
+}
+const b64uBytes = (s) => { const b = atob((s + "=".repeat((4 - (s.length % 4)) % 4)).replace(/-/g, "+").replace(/_/g, "/")); return Uint8Array.from(b, (c) => c.charCodeAt(0)); };
+async function postJson(url, obj) {
+  const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(obj) });
+  return r.json();
+}
+async function suscripcion() {
+  if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window))
+    throw new Error("Para recibir avisos abre la app desde su icono de la pantalla de inicio (en iPhone hace falta iOS 16.4 o más).");
+  let perm = Notification.permission;
+  if (perm === "default") perm = await Notification.requestPermission();   // tiene que ir lo primero: es un gesto tuyo
+  if (perm !== "granted") throw new Error("Has bloqueado las notificaciones. Actívalas en los Ajustes del móvil para esta app.");
+  const reg = await navigator.serviceWorker.ready;
+  let sub = await reg.pushManager.getSubscription();
+  let nueva = false;
+  if (!sub) {
+    const k = await pedir("/api/push/clave", 10000);
+    sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64uBytes(k.clave) });
+    nueva = true;
+  }
+  return { sub: sub.toJSON(), nueva };
+}
+function ligarAvisame(box, p) {
+  const fila = box.querySelector(".ir-avisame");
+  if (!fila) return;
+  const v = primerVehiculo(p), d0 = minutosHastaSalida(p, v);
+  const clave = `${p.es_manana ? "m" : "h"}|${v.linea}|${v.hm || Math.round(d0)}|${v.desde}`;
+  const btn = fila.querySelector(".avisame-b"), sel = fila.querySelector(".avisame-m"), msg = fila.querySelector(".avisame-e");
+  const pintar = () => {
+    const a = leer("push.avisos", {})[clave];
+    const vigente = a && a.cuando > Date.now() - 60000;
+    btn.textContent = vigente ? "🔕 Quitar aviso" : "🔔 Avísame";
+    btn.classList.toggle("on", !!vigente);
+    sel.hidden = !!vigente;
+    msg.textContent = vigente ? `Te aviso a las ${new Date(a.cuando).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })}` : "";
+  };
+  pintar();
+  sel.onchange = () => guardar("push.margen", +sel.value);
+  btn.onclick = async () => {
+    const todos = leer("push.avisos", {});
+    btn.disabled = true;
+    try {
+      if (todos[clave] && todos[clave].cuando > Date.now() - 60000) {
+        const { sub } = await suscripcion();
+        await postJson("/api/push/cancelar", { id: clave, endpoint: sub.endpoint });
+        delete todos[clave]; guardar("push.avisos", todos); pintar(); return;
+      }
+      const margen = +sel.value; guardar("push.margen", margen);
+      const { sub, nueva } = await suscripcion();
+      const falta = minutosHastaSalida(p, v);
+      const en = Math.max(0, falta - v.andar - margen);
+      const andar = Math.round(v.andar);
+      const titulo = `🚌 Tu ${v.linea} sale en ${Math.max(1, Math.round(v.andar + margen))} min (${v.hm || hm(Math.floor((new Date().getHours() * 60 + new Date().getMinutes()) + falta))})`;
+      const texto = andar >= 1 ? `Sal ya: son ${andar} min andando hasta ${v.desde}.` : `Estate ya en ${v.desde}.`;
+      const r = await postJson("/api/push/avisar", { sub, en_min: en, titulo, texto, id: clave });
+      if (!r.ok) throw new Error(r.error || "No pude programar el aviso.");
+      todos[clave] = { cuando: r.cuando * 1000 }; guardar("push.avisos", todos);
+      pintar();
+      if (nueva) {
+        const t = await postJson("/api/push/probar", { sub });
+        aviso(t.ok ? "Listo. Te acabo de mandar una notificación de prueba." : "Aviso guardado, pero la prueba falló (" + (t.codigo || "sin red") + ").");
+      } else aviso(en < 1 ? "Ya toca salir: te aviso ahora mismo." : "Hecho. Te aviso en " + Math.round(en) + " min.");
+    } catch (e) { aviso(e.message || "No pude activar el aviso."); }
+    finally { btn.disabled = false; }
+  };
 }
 
 $("ir-buscar").onclick = () => planificar();
