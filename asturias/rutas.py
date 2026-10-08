@@ -173,6 +173,26 @@ class Grafo:
                 return p
         return None
 
+    def ciudad_exacta(self, texto):
+        """«Gijón», «Oviedo», «Avilés» a secas: se llega (o se sale) por sus estaciones de tren y de autobús,
+        no por cualquier parada de la ciudad (que sería demasiado optimista) ni por una sola estación."""
+        n = normaliza(texto)
+        for loc in self.localidades:
+            if normaliza(loc) != n and normaliza(self.alias.get(loc, "")) != n:
+                continue
+            if not self.tiene_estacion(loc) or self.pueblo_pequeno(loc):
+                continue
+            ts = list(self.estaciones_de[loc])
+            ss = []
+            for i in self.localidades[loc]:
+                k = normaliza(self.nodos[i][2])
+                if "estacion" in k.split() and "servicio" not in k:
+                    ss.append(i)
+            ns = ts + [i for i in ss if i not in ts]
+            lat, lon = self._centro_de(ns)
+            return {"lat": lat, "lon": lon, "nombre": loc, "tipo": "localidad", "nodos": ns}
+        return None
+
     def localidad_pequena_exacta(self, texto):
         """El pueblo con ese nombre exacto, si es pequeño y tiene estación (para que «Candás» sea todo Candás)."""
         n = normaliza(texto)

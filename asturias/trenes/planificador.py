@@ -81,7 +81,7 @@ def geocodificar(texto, linea, bus, con_internet=True, grafo=None):
 
     # un pueblo pequeño con estación («Candás»): todo el pueblo, estación incluida
     if grafo is not None:
-        p = grafo.localidad_pequena_exacta(texto)
+        p = grafo.localidad_pequena_exacta(texto) or grafo.ciudad_exacta(texto)
         if p:
             return p
 

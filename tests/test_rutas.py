@@ -197,6 +197,23 @@ class TestRutas(unittest.TestCase):
         self.assertEqual(len(u), 2)
         self.assertEqual((u[0]["desde"], u[0]["hasta"], u[0]["metros"], u[0]["min"]), ("A", "C", 300, 4.5))
 
+    def test_ciudad_a_secas_son_sus_estaciones(self):
+        est = P.Estaciones([
+            {"id": "G", "nombre": "Gran Ciudad", "lat": 43.50, "lon": -5.80, "lineas": ["C1"]},
+            {"id": "B", "nombre": "Estación B", "lat": 43.50, "lon": -5.55, "lineas": ["C1"]},
+        ])
+        d = red_bus()
+        # una ciudad grande: paradas repartidas por 8 km, con una estación de autobuses y una gasolinera
+        d["paradas"].update({"G%d" % i: ["Calle %d" % i, "Gran Ciudad", 43.50 + 0.008 * (i - 4), -5.80] for i in range(9)})
+        d["paradas"]["GE"] = ["Estación de Autobuses", "Gran Ciudad", 43.502, -5.801]
+        d["paradas"]["GS"] = ["Estación de Servicio", "Gran Ciudad", 43.51, -5.80]
+        g = rutas.Grafo(est, {"interurbano": d})
+        self.assertIsNone(g.localidad_pequena_exacta("Gran Ciudad"))     # grande
+        c = g.ciudad_exacta("Gran Ciudad")
+        self.assertIsNotNone(c)
+        nombres = sorted(g.nodos[i][2] for i in c["nodos"])
+        self.assertEqual(nombres, ["Estación de Autobuses", "Gran Ciudad"])    # la estación de tren y la de autobuses
+
     def test_cambio_andando(self):
         # S3 y la estación A están a unos 150 m: se puede cambiar andando
         i3, ia = self.g.idx[("S", "S3")], self.g.idx[("T", 0)]

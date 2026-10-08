@@ -679,9 +679,12 @@ class App:
     def resolver(self, texto, lat, lon, nombre):
         if lat and lon:
             g = self.grafo_rutas() if nombre else None
-            if g is not None and nombre in g.localidades and (g.pueblo_pequeno(nombre) or not g.tiene_estacion(nombre)):
-                # un pueblo elegido de las sugerencias (una ciudad con estación del mismo nombre se queda en la estación)
-                return g.punto_localidad(nombre)
+            if g is not None and nombre in g.localidades:
+                if g.pueblo_pequeno(nombre) or not g.tiene_estacion(nombre):
+                    return g.punto_localidad(nombre)          # un pueblo elegido de las sugerencias
+                c = g.ciudad_exacta(nombre)                    # una ciudad: sus estaciones de tren y de autobús
+                if c:
+                    return c
             if g is not None and nombre:
                 c = g.buscar_concejo(nombre)       # «Somiedo», «Cabrales»: un conjunto de paradas
                 if c:
