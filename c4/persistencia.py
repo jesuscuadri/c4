@@ -126,9 +126,9 @@ class Almacen:
             print("Aviso: no se pudo bajar %s de GitHub: %s" % (ruta, e))
         return None
 
-    def subir_archivo(self, ruta, datos, borrar_prefijo=None, conservar=()):
+    def subir_archivo(self, ruta, datos, borrar_prefijo=None, conservar=(), borrar_si=None):
         """Sube (o reemplaza) un archivo en la rama de datos. Con `borrar_prefijo`, quita de esa carpeta lo viejo
-        (todo lo que no esté en `conservar`) para que no se acumule."""
+        (lo que no esté en `conservar` y, si se da, cumpla `borrar_si(ruta)`) para que no se acumule."""
         if not self.activo:
             return False
         try:
@@ -145,7 +145,7 @@ class Almacen:
                 if borrar_prefijo:
                     cod, lista = self._api("GET", "/repos/%s/contents/%s?ref=%s" % (self.repo, borrar_prefijo.rstrip("/"), self.rama))
                     for f in (lista or []) if cod == 200 and isinstance(lista, list) else []:
-                        if f["path"] not in conservar and f["path"] != ruta:
+                        if f["path"] not in conservar and f["path"] != ruta and (borrar_si is None or borrar_si(f["path"])):
                             self._api("DELETE", "/repos/%s/contents/%s" % (self.repo, f["path"]),
                                       {"message": "borra %s" % f["path"], "sha": f["sha"], "branch": self.rama})
             return True

@@ -4,6 +4,7 @@ import gzip
 import json
 import mimetypes
 import os
+import re
 import socket
 import threading
 import time
@@ -73,12 +74,12 @@ class App:
         hoy = date.today()
         if self.dia == hoy:
             return
-        datos = gtfs.extraer_red(self.cfg, hoy)
+        datos = self._con_memoria(gtfs.ruta_cache_red(self.cfg, hoy), lambda: gtfs.extraer_red(self.cfg, hoy))
         self.aprender()
         reg = None
         if self.cfg.get("regionales", True):
             try:
-                reg = gtfs.extraer_regionales(self.cfg, hoy, set(datos["paradas"]))
+                reg = self._con_memoria(gtfs.ruta_cache_reg(hoy), lambda: gtfs.extraer_regionales(self.cfg, hoy, set(datos["paradas"])))
                 print("Regionales y larga distancia por la red: %d trenes" % len(reg["viajes"]))
             except Exception as e:  # noqa: BLE001
                 print("Aviso: sin trenes regionales (%s)" % e)
@@ -423,6 +424,16 @@ class App:
             threading.Thread(target=preparar, daemon=True).start()
         return c[1] if c else None    # mientras, el de ayer si lo hay
 
+    def _con_memoria(self, local, calcular):
+        """Calcula un horario, pero antes mira si otro arranque ya lo dejó en GitHub, y después lo guarda allí."""
+        nuevo = not os.path.exists(local)
+        if nuevo and self._bajar_horario(local):
+            nuevo = False
+        d = calcular()
+        if nuevo and os.path.exists(local):
+            threading.Thread(target=self._subir_horario, args=(local,), daemon=True).start()
+        return d
+
     def _bajar_horario(self, local):
         """Si otro arranque ya procesó este horario, se recupera de GitHub (segundos, en vez de un minuto)."""
         try:
@@ -444,11 +455,13 @@ class App:
         try:
             with open(local, "rb") as f:
                 datos = gzip.compress(f.read(), 9)
-            hoy = date.today()
-            conservar = {"horarios/" + os.path.basename(cta.ruta_cache(r, d)) + ".gz"
-                         for r in cta.REDES for d in (hoy, hoy + timedelta(days=1))}
+            hoy = date.today().strftime("%Y%m%d")
+
+            def viejo(ruta):          # el nombre lleva la fecha: se borra lo de días anteriores
+                m = re.search(r"_(\d{8})_", ruta)
+                return bool(m) and m.group(1) < hoy
             self.almacen.subir_archivo("horarios/" + os.path.basename(local) + ".gz", datos,
-                                       borrar_prefijo="horarios", conservar=conservar)
+                                       borrar_prefijo="horarios", borrar_si=viejo)
         except Exception as e:  # noqa: BLE001
             print("Aviso: no se pudo guardar el horario en GitHub:", e)
 

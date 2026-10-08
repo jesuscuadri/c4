@@ -43,6 +43,13 @@ class TestHorarios(unittest.TestCase):
         a.subir_archivo("horarios/nuevo.json.gz", b"d", borrar_prefijo="horarios", conservar={"horarios/hoy.json.gz"})
         self.assertEqual(sorted(a.archivos), ["horarios/hoy.json.gz", "horarios/nuevo.json.gz"])
 
+    def test_borra_solo_lo_que_pide_el_predicado(self):
+        a = Falso()
+        a.archivos = {"horarios/x_20260101_v1.json.gz": b"a", "horarios/x_20261008_v1.json.gz": b"b"}
+        a.subir_archivo("horarios/y_20261008_v1.json.gz", b"d", borrar_prefijo="horarios",
+                        borrar_si=lambda r: "_20261008_" not in r)
+        self.assertEqual(sorted(a.archivos), ["horarios/x_20261008_v1.json.gz", "horarios/y_20261008_v1.json.gz"])
+
     def test_sin_token_no_hace_nada(self):
         a = Almacen(token="", repo="")
         self.assertFalse(a.subir_archivo("horarios/x", b"1"))

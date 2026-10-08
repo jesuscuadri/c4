@@ -116,12 +116,20 @@ def extraer(cfg, dia):
     return datos
 
 
+def ruta_cache_red(cfg, dia):
+    return os.path.join(CACHE, "red%s_%s_v%d.json" % (cfg["prefijo_nucleo"], dia.strftime("%Y%m%d"), VERSION_CACHE_RED))
+
+
+def ruta_cache_reg(dia):
+    return os.path.join(CACHE, "regionales_%s_v%d.json" % (dia.strftime("%Y%m%d"), VERSION_CACHE_REG))
+
+
 def extraer_red(cfg, dia):
     """Horario de TODAS las líneas de Cercanías del núcleo (Asturias) para un día:
     {'paradas': {id: [nombre, lat, lon]}, 'viajes': {trip_id: [[stop, llegada, salida], ...]},
      'lineas': {trip_id: 'C4'}, 'formas': {shape_id: [[lat, lon], ...]}, 'rutas': [route_id]}"""
     os.makedirs(CACHE, exist_ok=True)
-    cache = os.path.join(CACHE, "red%s_%s_v%d.json" % (cfg["prefijo_nucleo"], dia.strftime("%Y%m%d"), VERSION_CACHE_RED))
+    cache = ruta_cache_red(cfg, dia)
     if os.path.exists(cache):
         with open(cache, encoding="utf-8") as f:
             return json.load(f)
@@ -235,7 +243,7 @@ def extraer_regionales(cfg, dia, paradas_red, zip_ld=None):
     {'viajes': {trip_id: [[stop, llegada, salida], ...]},
      'tipos': {trip_id: [tipo, número, origen, destino]}}"""
     os.makedirs(CACHE, exist_ok=True)
-    cache = os.path.join(CACHE, "regionales_%s_v%d.json" % (dia.strftime("%Y%m%d"), VERSION_CACHE_REG))
+    cache = ruta_cache_reg(dia)
     if os.path.exists(cache) and zip_ld is None:
         with open(cache, encoding="utf-8") as f:
             return json.load(f)
