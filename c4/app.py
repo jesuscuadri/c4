@@ -281,7 +281,8 @@ class App:
                 t["km"] = [round(x, 3) for x in r["red"].viajes[t["id"]].km]
                 tr = self.tipos_reg.get(t["id"]) or self.tipos_num.get(t["num"])
                 if tr:
-                    t["servicio"] = tr[0].title() if tr[0] != "MD" else "Media Distancia"
+                    t["servicio"] = {"REGIONAL": "Regional", "MD": "Media Distancia", "ALVIA": "Alvia",
+                                     "INTERCITY": "Intercity"}.get(tr[0], tr[0])
                     if len(tr) > 3 and tr[3]:
                         t["origen_real"], t["destino_real"] = tr[2], tr[3]
                 t["k"] = [G[k] for k in t["k"]]
