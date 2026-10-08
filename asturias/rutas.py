@@ -569,18 +569,15 @@ def trenes_de_horario(est, datos):
     return out
 
 
-def primero_manana(est, redes_manana, trenes_manana, origen, destino):
-    """El primer viaje de mañana (desde las 0:00) entre dos puntos, o None. Sin datos en vivo."""
-    if not redes_manana and not trenes_manana:
-        return None
-    g = Grafo(est, redes_manana)
+def primero_manana(g, trenes_manana, origen, destino):
+    """El primer viaje de mañana (desde las 0:00) entre dos puntos, o None. g: grafo de mañana. Sin datos en vivo."""
     plan = planificar(g, {"trenes": trenes_manana}, None, origen, destino, 0.0, en_vivo=False,
-                    horizonte=24 * 60)
+                      horizonte=24 * 60)
     if not plan.get("ok") or not plan.get("etapas"):
         return None
     primero = next((e for e in plan["etapas"] if e.get("sale_hm") and e["tipo"] in ("tren", "autobus", "bus")), None)
-    return {"sale_hm": primero["sale_hm"] if primero else plan["sale_hm"], "llega_hm": plan["llega_hm"], "duracion": plan.get("duracion"),
-            "transbordos": plan.get("transbordos", 0)}
+    return {"sale_hm": primero["sale_hm"] if primero else plan["sale_hm"], "llega_hm": plan["llega_hm"],
+            "duracion": plan.get("duracion"), "transbordos": plan.get("transbordos", 0)}
 
 
 def _clave(x):

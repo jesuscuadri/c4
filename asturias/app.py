@@ -691,23 +691,49 @@ class App:
             return planificador.geocodificar(texto, linea, self.bus, grafo=self.grafo_rutas())
         return None
 
+    def _preparar_manana(self):
+        """En segundo plano: horarios de mañana (trenes y autobuses) y su grafo. Tarda; se guarda un rato."""
+        if getattr(self, "_manana_en", False):
+            return
+        self._manana_en = True
+
+        def trabajo():
+            try:
+                manana = date.today() + timedelta(days=1)
+                for red in consorcio.REDES:
+                    self.red_cta(red, True)
+                for _ in range(120):               # espera a que estén (cada red tarda unos segundos)
+                    if all((self._cta.get(r + "+1") or (None,))[0] == manana for r in consorcio.REDES):
+                        break
+                    time.sleep(3)
+                redes = {}
+                for red in consorcio.REDES:
+                    c = self._cta.get(red + "+1")
+                    if c and c[0] == manana:
+                        redes[red] = json.loads(c[1][0])
+                if self._manana[0] != manana:
+                    self._manana = (manana, gtfs.extraer_red(self.cfg, manana))
+                with self.lock:
+                    est = self.estaciones_plan
+                trenes = rutas.trenes_de_horario(est, self._manana[1])
+                self._manana_grafo = (manana, rutas.Grafo(est, redes), trenes, time.time())
+                print("Horario de mañana listo: %d trenes · %d redes de autobús" % (len(trenes), len(redes)))
+            except Exception:  # noqa: BLE001
+                traceback.print_exc()
+            finally:
+                self._manana_en = False
+        threading.Thread(target=trabajo, daemon=True).start()
+
     def _anadir_manana(self, plan, origen, destino):
-        """Si hoy ya no queda nada, cuándo sale mañana el primero (trenes de Cercanías + autobuses)."""
+        """Si hoy ya no queda nada, cuándo sale mañana el primero (trenes de Cercanías + autobuses).
+        Si aún no está preparado el horario de mañana, lo prepara en segundo plano para la próxima vez."""
         try:
             manana = date.today() + timedelta(days=1)
-            for red, c in consorcio.REDES.items():
-                self.red_cta(red, True)       # por si aún no estaba preparado
-            redes = {}      # el horario de mañana no se guarda como objeto (pesa): se lee del JSON ya preparado
-            for red in consorcio.REDES:
-                c = self._cta.get(red + "+1")
-                if c and c[0] == manana:
-                    redes[red] = json.loads(c[1][0])
-            if self._manana[0] != manana:
-                self._manana = (manana, gtfs.extraer_red(self.cfg, manana))
-            with self.lock:
-                est = self.estaciones_plan
-            trenes = rutas.trenes_de_horario(est, self._manana[1])
-            p = rutas.primero_manana(est, redes, trenes, origen, destino)
+            m = getattr(self, "_manana_grafo", None)
+            if not m or m[0] != manana or time.time() - m[3] > 3 * 3600:
+                self._preparar_manana()
+                return
+            p = rutas.primero_manana(m[1], m[2], origen, destino)
             if p:
                 plan["manana"] = p
                 plan["error"] += " Mañana el primero sale a las %s y llega a las %s." % (p["sale_hm"], p["llega_hm"])

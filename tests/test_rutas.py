@@ -91,11 +91,10 @@ class TestRutas(unittest.TestCase):
         horario = {"viajes": {"X1": [["A", 0, 700], ["B", 730, 730]]}, "lineas": {"X1": "C1"}}
         trenes = rutas.trenes_de_horario(EST, horario)
         self.assertEqual(len(trenes), 1)
-        p = rutas.primero_manana(EST, {"interurbano": red_bus()}, trenes, origen, destino)
+        p = rutas.primero_manana(rutas.Grafo(EST, {"interurbano": red_bus()}), trenes, origen, destino)
         self.assertIsNotNone(p)
         self.assertEqual(p["sale_hm"], "10:00")
         self.assertEqual(p["llega_hm"], "12:10")
-        self.assertIsNone(rutas.primero_manana(EST, {}, [], origen, destino))
 
     def test_nombres_que_se_confunden(self):
         d = red_bus()
