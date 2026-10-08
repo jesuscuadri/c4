@@ -15,6 +15,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import gtfs
 from . import planificador
+from . import cta
 from .estimador import Estimador
 from .historial import (Precision, aprender_calibracion, correccion, aprender_paradas, aprender_salidas, aprender_sesgos, aprender_tiempos,
                         guardar_observaciones, guardar_resumen, resumen)
@@ -377,6 +378,34 @@ class App:
         t["est_a"] = [None if x is None else round(x, 3) for x in a]
         t["est_d"] = [None if x is None else round(x, 3) for x in d]
 
+    def red_cta(self, red):
+        """Horario de hoy de una red de bus del Consorcio, ya en JSON (y comprimido). Se prepara en
+        segundo plano la primera vez (el fichero del Consorcio pesa ~6 MB)."""
+        if not hasattr(self, "_cta"):
+            self._cta, self.error_cta, self._cta_en = {}, {}, set()
+        hoy = date.today()
+        c = self._cta.get(red)
+        if c and c[0] == hoy:
+            return c[1]
+        if red not in self._cta_en:
+            self._cta_en.add(red)
+
+            def preparar():
+                try:
+                    d = cta.extraer(red, hoy)
+                    crudo = json.dumps(d, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+                    self._cta[red] = (hoy, (crudo, gzip.compress(crudo, 6)))
+                    self.error_cta.pop(red, None)
+                    print("Bus %s: %d líneas · %d paradas · %d viajes hoy" % (
+                        d["nombre"], len(d["lineas"]), len(d["paradas"]), len(d["viajes"])))
+                except Exception as e:  # noqa: BLE001
+                    traceback.print_exc()
+                    self.error_cta[red] = str(e)
+                finally:
+                    self._cta_en.discard(red)
+            threading.Thread(target=preparar, daemon=True).start()
+        return c[1] if c else None    # mientras, el de ayer si lo hay
+
     def _lineas_de_aviso(self, a):
         """A qué líneas afecta un aviso de Renfe (por sus rutas o sus estaciones)."""
         out = set()
@@ -584,6 +613,12 @@ class App:
             return {"ok": False, "error": "No pude calcular la ruta (%s)." % e}
 
     def bucle(self):
+        # el horario de los buses del Consorcio, preparado de antemano (tarda unos segundos)
+        for red in cta.REDES:
+            try:
+                self.red_cta(red)
+            except Exception:  # noqa: BLE001
+                pass
         # antes de nada, recuperar lo aprendido (el disco de Render llega vacío tras cada reinicio)
         if self.almacen.activo:
             self.almacen.cargar()
@@ -739,6 +774,19 @@ def servir(app, abrir=True, en_red=False, publico=False):
                 return self._json(app.aprendizaje(q.get("linea", [""])[0] or None))
             if ruta == "/api/ping":
                 return self._json({"ok": True, "hora": datetime.now().strftime("%H:%M:%S")})
+            if ruta == "/api/cta/redes":
+                return self._json({"redes": [{"id": k, "nombre": v["nombre"], "color": v["color"]} for k, v in cta.REDES.items()]})
+            if ruta == "/api/cta/red":
+                q = parse_qs(urlparse(self.path).query)
+                red = q.get("red", ["aviles"])[0]
+                if red not in cta.REDES:
+                    return self._json({"error": "No conozco esa red."})
+                c = app.red_cta(red)
+                if c is None:
+                    return self._json({"cargando": True, "error": app.error_cta.get(red)})
+                return self._enviar(c[0], "application/json; charset=utf-8", gz=c[1])
+            if ruta == "/cta" or ruta == "/cta/":
+                ruta = "/cta/index.html"
             if ruta == "/api/bus/red":
                 return self._json(app.bus.resumen_red() if app.bus else {"error": "sin datos de bus"})
             if ruta == "/api/bus/coordenadas":
@@ -808,9 +856,10 @@ def servir(app, abrir=True, en_red=False, publico=False):
                     return self._json({"error": str(e), "trenes": []})
             if ruta == "/":
                 ruta = "/index.html"
-            if ruta.startswith("/bus/"):
-                raiz = os.path.join(RAIZ, "web-bus")
-                fichero = os.path.normpath(os.path.join(raiz, ruta[len("/bus/"):]))
+            if ruta.startswith("/bus/") or ruta.startswith("/cta/"):
+                pref = ruta[:5]
+                raiz = os.path.join(RAIZ, "web-bus" if pref == "/bus/" else "web-cta")
+                fichero = os.path.normpath(os.path.join(raiz, ruta[len(pref):]))
                 base = os.path.normpath(raiz)
             else:
                 fichero = os.path.normpath(os.path.join(WEB, ruta.lstrip("/")))

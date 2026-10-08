@@ -1,0 +1,17 @@
+:root{--ac:#0b5cab;--ac2:#084a8a}
+@media (prefers-color-scheme:dark){:root{--ac:#5aa2ff;--ac2:#5aa2ff}}
+.txt-l{display:inline}
+@media (max-width:600px){.txt-l{display:none}.marca small{display:none}}
+.lg-prog{background:var(--ac)!important;opacity:.85}
+.bm.prog .bm-l{opacity:.92;outline:2px dashed rgba(255,255,255,.7);outline-offset:-1px}
+.horario-tag{display:inline-block;font-size:11px;font-weight:700;color:var(--mut);border:1px solid var(--bd2);border-radius:6px;padding:0 5px;margin-left:6px;vertical-align:1px}
+.lin-paradas{margin-top:8px;border-left:3px solid var(--c,var(--ac));padding-left:12px}
+.lp{display:flex;gap:10px;align-items:baseline;padding:5px 0;border-bottom:1px solid var(--bd);cursor:pointer}
+.lp:last-child{border-bottom:0}
+.lp .lp-n{flex:1;min-width:0}
+.lp .lp-n small{color:var(--mut);font-size:12px;margin-left:4px}
+.lp .lp-h{font-variant-numeric:tabular-nums;font-weight:700;color:var(--tx2)}
+.var-sel{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}
+.var-sel button{border:1px solid var(--bd2);background:var(--panel2);color:var(--tx);border-radius:99px;padding:5px 11px;font-weight:600;font-size:13px;cursor:pointer}
+.var-sel button.on{background:var(--tx);color:var(--panel);border-color:var(--tx)}
+.prox-lin{font-size:13px;color:var(--tx2);margin:6px 0 2px}

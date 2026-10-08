@@ -1901,8 +1901,10 @@ function prepararIphone() {
 /* Al entrar: ¿tren o bus? */
 for (const b of document.querySelectorAll("#elegir [data-modo]")) b.onclick = () => {
   const m = b.dataset.modo;
+  if (m === "bus") { $("el-ciudades").hidden = !$("el-ciudades").hidden; return; }   // primero, la ciudad
   guardar("modo_auto", $("el-recordar").checked ? m : null);
-  if (m === "bus") { location.href = "/bus/"; return; }
+  if (m === "bus:gijon") { location.href = "/bus/"; return; }
+  if (m === "bus:aviles") { location.href = "/cta/?red=aviles"; return; }
   $("elegir").hidden = true;
   if (location.search) history.replaceState(null, "", location.pathname + location.hash);
 };

@@ -560,3 +560,7 @@ h2 .num-t{font-size:13px}
 .sc{flex:0 0 auto;border:0;background:none;color:var(--tx2);font-weight:700;font-size:13.5px;padding:6px 12px;border-radius:99px;cursor:pointer;white-space:nowrap}
 .sc.on{background:var(--tx);color:var(--bg)}
 .pie-link{color:var(--c4);font-weight:600;text-decoration:none}
+.el-ciudades{display:flex;flex-direction:column;gap:10px;padding-left:18px;border-left:3px solid var(--bd2)}
+.el-ciudades[hidden]{display:none}
+.el-sub{color:var(--tx2);font-weight:700;font-size:14px}
+.el-ciudad{padding:14px 16px}.el-ciudad b{font-size:18px}.el-ciudad .el-ic{font-size:30px}

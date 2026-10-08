@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b5cab">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Bus Avilés">
+<title>Autobuses de Avilés · horarios</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230b5cab'/%3E%3Ctext x='32' y='45' font-family='Arial' font-weight='700' font-size='34' fill='white' text-anchor='middle'%3E%F0%9F%9A%8C%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="/bus/bus.css">
+<link rel="stylesheet" href="cta.css">
+</head>
+<body>
+<header class="top">
+  <div class="top-in">
+    <div class="marca">
+      <span class="pill-bus" id="pill">🚌</span>
+      <h1><span id="titulo">Autobuses</span> <small id="subtitulo">Horario oficial del Consorcio de Transportes de Asturias</small></h1>
+    </div>
+    <div class="estado">
+      <span class="chip" id="chip"><span class="dot"></span><span id="chip-txt">Cargando…</span></span>
+      <a class="btn-tren" href="/?elegir=bus" title="Elegir otra ciudad">🏙️<span class="txt-l"> Ciudad</span></a>
+      <a class="btn-tren" href="/#inicio" title="Trenes de Asturias">🚆<span class="txt-l"> Trenes</span></a>
+    </div>
+  </div>
+  <nav class="tabs" role="tablist">
+    <button role="tab" data-tab="mapa" aria-selected="true"><svg class="ico" viewBox="0 0 24 24"><path d="M9 4 3.5 6v14L9 18l6 2 5.5-2V4L15 6 9 4zM9 4v14M15 6v14"/></svg><span>Mapa</span></button>
+    <button role="tab" data-tab="cerca"><svg class="ico" viewBox="0 0 24 24"><path d="M12 21s-7-6.5-7-11a7 7 0 0 1 14 0c0 4.5-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg><span>Cerca</span></button>
+    <button role="tab" data-tab="buscar"><svg class="ico" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.5-4.5"/></svg><span>Buscar</span></button>
+    <button role="tab" data-tab="lineas"><svg class="ico" viewBox="0 0 24 24"><path d="M5 6h14M5 12h14M5 18h14"/></svg><span>Líneas</span></button>
+    <button role="tab" data-tab="favoritos"><svg class="ico" viewBox="0 0 24 24"><path d="M12 4l2.4 5 5.6.6-4.2 3.8 1.2 5.6L12 21l-5 2.8 1.2-5.6L4 9.6 9.6 9z"/></svg><span>Favoritas</span></button>
+  </nav>
+</header>
+
+<main>
+  <div id="avisos"></div>
+  <section id="tab-mapa">
+    <div class="panel panel-mapa">
+      <div class="mapa-barra">
+        <div class="chips-lineas" id="chips-lineas" role="toolbar" aria-label="Filtrar por línea"></div>
+        <button class="btn-ico" id="yo" title="Centrar en mi ubicación" aria-label="Centrar en mi ubicación">📍</button>
+      </div>
+      <div class="mapa-caja">
+        <div id="mapa"></div>
+        <div class="vivo-pill" id="vivo-cont"></div>
+      </div>
+      <div class="leyenda">
+        <span><span class="lg-bus lg-prog"></span>Autobús <b>según horario</b> (posición estimada: el Consorcio no publica dónde va cada bus)</span>
+        <span><span class="lg-parada"></span>Parada: tócala para ver los próximos</span>
+      </div>
+    </div>
+  </section>
+  <section id="tab-cerca" hidden>
+    <div class="panel">
+      <h2>Paradas cerca de ti</h2>
+      <p class="sub">Las paradas más cercanas y los próximos autobuses de cada una, según el horario.</p>
+      <button class="btn-grande" id="loc">📍 Buscar paradas cerca de mí</button>
+      <div id="cerca-lista"></div>
+    </div>
+  </section>
+  <section id="tab-buscar" hidden>
+    <div class="panel">
+      <label class="campo"><span>Buscar parada</span>
+        <input id="q" type="search" placeholder="Nombre de la parada (p. ej. Hospital, La Luz)" autocomplete="off"></label>
+      <div id="buscar-lista"></div>
+    </div>
+  </section>
+  <section id="tab-lineas" hidden>
+    <div class="panel">
+      <h2 id="lineas-tit">Líneas</h2>
+      <p class="sub">Toca una línea para ver su recorrido, sus paradas y cuándo pasa.</p>
+      <div id="lineas-lista" class="lineas-grid"></div>
+    </div>
+  </section>
+  <section id="tab-favoritos" hidden>
+    <div class="panel">
+      <h2>Paradas favoritas</h2>
+      <div id="fav-lista"></div>
+    </div>
+  </section>
+  <p class="pie" id="pie"></p>
+</main>
+
+<div class="hoja" id="hoja" hidden>
+  <div class="hoja-fondo" id="hoja-fondo"></div>
+  <div class="hoja-caja" id="hoja-caja"></div>
+</div>
+<div class="toast" id="toast" hidden></div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" defer></script>
+<script src="cta.js" defer></script>
+</body>
+</html>
