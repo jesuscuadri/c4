@@ -705,6 +705,11 @@ class App:
         def trabajo():
             try:
                 manana = date.today() + timedelta(days=1)
+                for _ in range(100):               # las estaciones se cargan con el primer ciclo
+                    with self.lock:
+                        if self.estaciones_plan is not None:
+                            break
+                    time.sleep(3)
                 for red in consorcio.REDES:
                     self.red_cta(red, True)
                 for _ in range(120):               # espera a que estén (cada red tarda unos segundos)
@@ -733,10 +738,20 @@ class App:
         """(día, grafo, trenes, ts) de mañana si ya está preparado; si no, lo empieza a preparar y devuelve None."""
         manana = date.today() + timedelta(days=1)
         m = getattr(self, "_manana_grafo", None)
-        if not m or m[0] != manana or time.time() - m[3] > 3 * 3600:
+        if not m or m[0] != manana:
             self._preparar_manana()
             return None
         return m
+
+    def _mantener_manana(self):
+        """Tener siempre preparado el horario de mañana (y rehacerlo cuando cambia el día o si falló)."""
+        m = getattr(self, "_manana_grafo", None)
+        if m and m[0] == date.today() + timedelta(days=1):
+            return
+        if time.time() - getattr(self, "_manana_intento", 0) < 600:
+            return
+        self._manana_intento = time.time()
+        self._preparar_manana()
 
     def _anadir_manana(self, plan, origen, destino):
         """Si hoy ya no queda nada, cuándo sale mañana el primero (trenes de Cercanías + autobuses).
@@ -744,7 +759,7 @@ class App:
         try:
             manana = date.today() + timedelta(days=1)
             m = getattr(self, "_manana_grafo", None)
-            if not m or m[0] != manana or time.time() - m[3] > 3 * 3600:
+            if not m or m[0] != manana:
                 self._preparar_manana()
                 return
             p = rutas.primero_manana(m[1], m[2], origen, destino)
@@ -830,6 +845,7 @@ class App:
         ultimo = 0.0
         while True:
             try:
+                self._mantener_manana()
                 # Renfe publica posiciones cada ~20 s. Se le pregunta cada pocos segundos si hay algo
                 # nuevo (normalmente contesta «sin cambios» sin mandar nada) y, en cuanto lo hay,
                 # se recalcula al momento: así lo que ves va unos segundos por detrás de Renfe, no 30-40.
