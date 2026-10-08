@@ -724,6 +724,15 @@ class App:
                 self._manana_en = False
         threading.Thread(target=trabajo, daemon=True).start()
 
+    def grafo_manana(self):
+        """(día, grafo, trenes, ts) de mañana si ya está preparado; si no, lo empieza a preparar y devuelve None."""
+        manana = date.today() + timedelta(days=1)
+        m = getattr(self, "_manana_grafo", None)
+        if not m or m[0] != manana or time.time() - m[3] > 3 * 3600:
+            self._preparar_manana()
+            return None
+        return m
+
     def _anadir_manana(self, plan, origen, destino):
         """Si hoy ya no queda nada, cuándo sale mañana el primero (trenes de Cercanías + autobuses).
         Si aún no está preparado el horario de mañana, lo prepara en segundo plano para la próxima vez."""
@@ -740,7 +749,39 @@ class App:
         except Exception:  # noqa: BLE001
             traceback.print_exc()
 
-    def ir(self, origen, destino, solo_tren=False):
+    def ir_a_otra_hora(self, origen, destino, hora, dia, modo):
+        """Plan para salir (o llegar) a una hora concreta, hoy o mañana. hora en minutos."""
+        ahora = ahora_min()
+        if dia == "manana":
+            m = self.grafo_manana()
+            if m is None:
+                return {"ok": False, "preparando": True,
+                        "error": "Estoy preparando el horario de mañana. Prueba otra vez en un minuto."}
+            g, res, bus = m[1], {"trenes": m[2]}, None
+            origen, destino = rutas._de_este_grafo(g, origen), rutas._de_este_grafo(g, destino)
+            desde = 0.0
+        else:
+            g = self.grafo_rutas()
+            with self.lock:
+                res = self.res
+            if g is None or res is None:
+                return {"ok": False, "cargando": True}
+            bus = self.bus
+            desde = ahora
+            if hora < ahora - 1:
+                return {"ok": False, "error": "Esa hora de hoy ya ha pasado. Elige una posterior o prueba «Mañana»."}
+        if modo == "llegar":
+            p = rutas.planificar_llegada(g, res, bus, origen, destino, hora, desde=desde, en_vivo=False)
+        else:
+            p = rutas.planificar(g, res, bus, origen, destino, max(hora, desde), en_vivo=False)
+        p["pedido"] = {"dia": dia, "modo": modo, "hora_hm": rutas.hm(hora)}
+        if dia == "manana":
+            p["es_manana"] = True
+        elif p.get("ok") and "sale" in p:
+            p["sale_en"] = round(max(0.0, p["sale"] - ahora), 1)
+        return p
+
+    def ir(self, origen, destino, solo_tren=False, hora=None, dia="hoy", modo="salir"):
         if not origen:
             return {"ok": False, "error": "Falta el origen.", "cual": "origen"}
         if not destino:
@@ -750,6 +791,8 @@ class App:
         if linea is None or res is None:
             return {"ok": False, "cargando": True}
         try:
+            if not solo_tren and (hora is not None or dia == "manana"):
+                return self.ir_a_otra_hora(origen, destino, 0.0 if hora is None else hora, dia, modo)
             g = None if solo_tren else self.grafo_rutas()
             if g is not None:
                 plan = rutas.planificar(g, res, self.bus, origen, destino, ahora_min())
@@ -1032,7 +1075,15 @@ def servir(app, abrir=True, en_red=False, publico=False):
                     return self._json({"ok": False, "error": "No encontré el origen «%s»." % g("origen"), "cual": "origen"})
                 if g("destino") and not destino:
                     return self._json({"ok": False, "error": "No encontré el destino «%s»." % g("destino"), "cual": "destino"})
-                return self._json(app.ir(origen, destino, solo_tren=g("solo_tren") == "1"))
+                hora = None
+                m_ = re.match(r"^(\d{1,2}):(\d{2})$", g("hora"))
+                if m_:
+                    hora = min(23, int(m_.group(1))) * 60.0 + min(59, int(m_.group(2)))
+                dia = "manana" if g("dia") == "manana" else "hoy"
+                modo = "llegar" if g("modo") == "llegar" else "salir"
+                return self._json(app.ir(origen, destino, solo_tren=g("solo_tren") == "1", hora=hora, dia=dia, modo=modo))
+            if ruta == "/api/preparar_manana":
+                return self._json({"listo": app.grafo_manana() is not None})
             if ruta == "/api/manana":
                 q = parse_qs(urlparse(self.path).query)
                 try:

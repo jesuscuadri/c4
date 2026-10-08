@@ -264,6 +264,18 @@ body.mapa-grande #mapa{flex:1;height:auto;border-radius:0;border:0}
 .btn-cta{background:var(--c4);color:#fff;border:0;border-radius:10px;padding:11px 16px;font-weight:700;cursor:pointer;white-space:nowrap}
 .btn-cta:hover{background:var(--c4d)}
 .btn-cta:disabled{opacity:.6;cursor:default}
+.ir-cuando{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:12px 0 0}
+.ir-cuando label{font-size:12.5px;color:var(--tx2);font-weight:600}
+.ir-cuando select,.ir-cuando input{font-size:15px;padding:8px 10px;border-radius:10px;border:1px solid var(--bd2);background:var(--panel2);color:var(--tx)}
+.ir-cuando select:focus,.ir-cuando input:focus{outline:none;border-color:var(--c4)}
+.ir-fav{margin-left:auto;font-size:20px;line-height:1}
+.ir-fav.on{color:#f5b301}
+.ir-favs button.fav{display:inline-flex;flex-direction:column;align-items:flex-start;gap:1px;text-align:left}
+.ir-favs .fav-t{font-weight:700;color:var(--tx)}
+.ir-favs .fav-s{font-size:12px;font-weight:600;color:var(--tx2)}
+.ir-favs .fav-x{border:0;background:transparent;color:var(--mut);cursor:pointer;font-size:15px;padding:4px 8px;border-radius:99px}
+.ir-favs .fav-w{display:inline-flex;align-items:center;gap:0;border:1px solid var(--bd2);background:var(--panel2);border-radius:14px}
+.ir-favs .fav-w button.fav{border:0;background:transparent}
 .ir-ej{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 0}
 .ir-ej button{border:1px solid var(--bd2);background:var(--panel2);color:var(--tx2);border-radius:99px;padding:6px 12px;font-size:13px;font-weight:600;cursor:pointer}
 .ir-ej button:hover{border-color:var(--c4);color:var(--tx)}

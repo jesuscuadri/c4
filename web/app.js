@@ -1639,6 +1639,7 @@ function irA(tab) {
     setTimeout(() => { if (mapa) { mapa.invalidateSize(); if (nuevo) vistaInicialMapa(); pintarTrenesMapa(); } }, 60);
   }
   if (tab === "precision") cargarPrecision();
+  if (tab === "ir") setTimeout(() => actualizarFavoritos(), 300);
   if (necesitaTodas()) cargarTodas();
   pintarTodo();
 }
@@ -1726,15 +1727,20 @@ async function planificar(silencioso) {
   const po = paramPunto("o", $("ir-o"), ELEGIDO.o), pd = paramPunto("d", $("ir-d"), ELEGIDO.d);
   if (!pd) { if (!silencioso) $("ir-d").focus(); return; }
   if (!po) { if (!silencioso) $("ir-o").focus(); return; }
-  const url = "/api/ir?" + (po + pd).slice(1);
+  const modo = $("ir-modo").value, horaTxt = $("ir-hora").value;
+  if (modo !== "ahora" && !horaTxt) { if (!silencioso) { $("ir-hora").focus(); aviso("Elige una hora."); } return; }
+  const cuando = modo === "ahora" ? "" : `&hora=${horaTxt}&dia=${$("ir-dia").value}&modo=${modo}`;
+  const url = "/api/ir?" + (po + pd).slice(1) + cuando;
   if (!silencioso) {
     $("ir-resultado").innerHTML = `<div class="ir-cargando">Buscando la mejor combinación…</div>`;
     $("ir-buscar").disabled = true;
   }
   try {
     const p = await pedir(url, 16000);
-    PLAN_ULTIMO = { url, ts: Date.now() };
+    PLAN_ULTIMO = modo === "ahora" ? { url, ts: Date.now() } : null;     // solo lo «de ahora» se recalcula solo
     pintarPlan(p);
+    if (p.preparando) setTimeout(() => { if (tabActual === "ir" && !PLAN_ULTIMO) planificar(true); }, 20000);
+    pintarFavBoton();
     if (p.ok && !silencioso) guardarReciente($("ir-o").value.trim(), $("ir-d").value.trim());
   } catch (e) { if (!silencioso) pintarPlan({ ok: false, error: "No pude conectar con el servidor. Prueba otra vez en un momento." }); }
   finally { $("ir-buscar").disabled = false; }
@@ -1844,6 +1850,7 @@ function pintarPlan(p, box) {
   const dur = p.duracion != null ? `${Math.round(p.duracion)} min de viaje` : "";
   const en = p.sale_en != null ? Math.round(p.sale_en) : 0;
   const enParada = p.origen && p.origen.tipo === "localidad" && p.etapas.length && p.etapas[0].tipo === "autobus";
+  const pedido = p.pedido ? (p.pedido.modo === "llegar" ? `<div class="sub" style="margin-top:2px">Para llegar antes de las ${esc(p.pedido.hora_hm)}</div>` : "") : "";
   const salir = p.es_manana
     ? (enParada
       ? `<div class="ir-salir">Mañana, estate en <b>${esc(p.etapas[0].subir)}</b> a las <b class="num">${p.sale_hm}</b></div>`
@@ -1855,7 +1862,7 @@ function pintarPlan(p, box) {
     : `<div class="ir-salir ya">Sal <b>ya</b></div>`;
   let h = `<div class="ir-cab">
       <div class="ir-od"><span class="ir-de">${esc(p.origen.nombre.replace(/ \((estación|parada)\)$/, ""))}</span><span class="ir-fl">→</span><span class="ir-a">${esc(p.destino.nombre.replace(/ \((estación|parada)\)$/, ""))}</span></div>
-      ${salir}
+      ${salir}${pedido}
       <div class="ir-tot">Llegas a las <b class="num">${p.llega_hm || "--:--"}</b>${dur ? ` · ${dur}` : ""}</div>
     </div><ol class="ir-etapas">`;
   for (const e of p.etapas) {
@@ -1901,6 +1908,85 @@ function pintarPlan(p, box) {
 }
 
 $("ir-buscar").onclick = () => planificar();
+
+/* cuándo: ahora, salir a una hora o llegar antes de una hora (hoy o mañana) */
+function ajustarCuando() {
+  const m = $("ir-modo").value, otra = m !== "ahora";
+  $("ir-dia").hidden = !otra; $("ir-hora").hidden = !otra;
+  if (otra && !$("ir-hora").value) {
+    const d = new Date(Date.now() + 30 * 60000);
+    d.setMinutes(d.getMinutes() < 30 ? 30 : 60, 0, 0);
+    $("ir-hora").value = $("ir-dia").value === "manana" ? "08:00" : d.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" });
+  }
+  if ($("ir-dia").value === "manana" && otra) pedir("/api/preparar_manana", 8000).catch(() => {});   // que esté listo
+}
+$("ir-modo").onchange = ajustarCuando;
+$("ir-dia").onchange = () => { if ($("ir-dia").value === "manana" && $("ir-hora").value > "12:00") $("ir-hora").value = "08:00"; ajustarCuando(); };
+for (const id of ["ir-modo", "ir-dia", "ir-hora"]) $(id).addEventListener("change", () => { if ($("ir-o").value.trim() && $("ir-d").value.trim() && tabActual === "ir") planificar(); });
+
+/* viajes favoritos (en este dispositivo) */
+const favClave = (o, d) => o.trim() + "→" + d.trim();
+const corto = (x) => x === MI_UBIC ? "📍 Aquí" : x.replace(/ \((estación|parada de bus)\)$/, "").split(" · ")[0];
+function pintarFavBoton() {
+  const o = $("ir-o").value.trim(), d = $("ir-d").value.trim();
+  const es = !!(o && d) && leer("ir.favoritos", []).some((f) => favClave(f.o, f.d) === favClave(o, d));
+  $("ir-fav").textContent = es ? "★" : "☆";
+  $("ir-fav").classList.toggle("on", es);
+  $("ir-fav").title = es ? "Quitar de favoritos" : "Guardar este viaje en favoritos";
+}
+$("ir-fav").onclick = () => {
+  const o = $("ir-o").value.trim(), d = $("ir-d").value.trim();
+  if (!o || !d) { aviso("Escribe el origen y el destino para guardarlo."); return; }
+  let f = leer("ir.favoritos", []);
+  const k = favClave(o, d);
+  f = f.some((x) => favClave(x.o, x.d) === k) ? f.filter((x) => favClave(x.o, x.d) !== k) : [{ o, d }, ...f].slice(0, 6);
+  guardar("ir.favoritos", f);
+  pintarFavoritos(); pintarFavBoton();
+};
+$("ir-o").addEventListener("input", pintarFavBoton);
+$("ir-d").addEventListener("input", pintarFavBoton);
+
+let favCargando = false, favUltimo = 0;
+function pintarFavoritos() {
+  const f = leer("ir.favoritos", []);
+  const cont = $("ir-favoritos");
+  cont.hidden = !f.length;
+  cont.innerHTML = f.length ? `<span class="ir-ej-t">⭐ Favoritos</span>` + f.map((x, i) =>
+    `<span class="fav-w"><button type="button" class="fav" data-i="${i}"><span class="fav-t">${esc(corto(x.o))} → ${esc(corto(x.d))}</span><span class="fav-s" id="fav-s-${i}">${esc(x.res || "toca para ver")}</span></button><button type="button" class="fav-x" data-x="${i}" aria-label="Quitar">×</button></span>`).join("") : "";
+  for (const b of cont.querySelectorAll("button.fav")) b.onclick = () => {
+    const x = f[+b.dataset.i];
+    ELEGIDO.o = ELEGIDO.d = null;
+    $("ir-modo").value = "ahora"; ajustarCuando();
+    if (x.o === MI_UBIC) { $("ir-d").value = x.d; usarGps(); return; }
+    GPS = null; $("ir-o").value = x.o; $("ir-d").value = x.d; planificar();
+  };
+  for (const b of cont.querySelectorAll(".fav-x")) b.onclick = () => {
+    guardar("ir.favoritos", f.filter((_, i) => i !== +b.dataset.x));
+    pintarFavoritos(); pintarFavBoton();
+  };
+}
+// debajo de cada favorito, cuándo es el próximo (se pregunta de uno en uno, y no más de cada 2 minutos)
+async function actualizarFavoritos() {
+  const f = leer("ir.favoritos", []);
+  if (!f.length || favCargando || Date.now() - favUltimo < 120000) return;
+  favCargando = true; favUltimo = Date.now();
+  try {
+    for (let i = 0; i < f.length; i++) {
+      const x = f[i];
+      const po = x.o === MI_UBIC ? (GPS ? `olat=${GPS[0]}&olon=${GPS[1]}` : "") : "origen=" + encodeURIComponent(x.o);
+      if (!po) continue;
+      try {
+        const p = await pedir(`/api/ir?${po}&destino=${encodeURIComponent(x.d)}`, 20000);
+        x.res = p.ok ? `sal ${p.sale_hm} · llegas ${p.llega_hm}`
+          : p.manana ? `mañana ${p.manana.sale_hm}` : "hoy ya no hay";
+        const el = $("fav-s-" + i); if (el) el.textContent = x.res;
+      } catch (e) { /* se queda como estaba */ }
+    }
+    guardar("ir.favoritos", f.map((x) => ({ o: x.o, d: x.d, res: x.res })));
+  } finally { favCargando = false; }
+}
+setInterval(() => { if (tabActual === "ir" && !document.hidden) actualizarFavoritos(); }, 20000);
+pintarFavoritos(); pintarFavBoton();
 $("ir-gps").onclick = usarGps;
 $("ir-o").addEventListener("input", () => { if ($("ir-o").value !== MI_UBIC) GPS = null; });
 $("ir-swap").onclick = () => {

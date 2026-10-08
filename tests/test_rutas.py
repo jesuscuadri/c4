@@ -101,6 +101,20 @@ class TestRutas(unittest.TestCase):
         origen2 = dict(origen, nodos=[999, 1000])
         self.assertIsNotNone(rutas.primero_manana(rutas.Grafo(EST, {"interurbano": red_bus()}), trenes, origen2, destino))
 
+    def test_llegar_antes_de(self):
+        origen = self.g.punto_localidad("Villabus")
+        destino = {"lat": 43.5005, "lon": -5.5505, "nombre": "Casa", "tipo": "gps"}
+        res = {"trenes": [tren("T1", 640, 670), tren("T2", 700, 730), tren("T3", 760, 790)]}
+        # el bus (sale a las 10:00, llega 10:30) enlaza con T1 (llega 11:10) pero T2 sale a las 11:40... pedir las 12:00
+        p = rutas.planificar_llegada(self.g, res, None, origen, destino, 12 * 60)
+        self.assertTrue(p["ok"], p)
+        self.assertLessEqual(p["llega"], 12 * 60)
+        self.assertEqual(p["limite_hm"], "12:00")
+        # pedir llegar antes de las 10:00: imposible
+        q = rutas.planificar_llegada(self.g, res, None, origen, destino, 10 * 60)
+        self.assertFalse(q["ok"])
+        self.assertIn("antes de las", q["error"])
+
     def test_nombres_que_se_confunden(self):
         d = red_bus()
         d["paradas"].update({"M1": ["A", "Mieres", 43.40, -5.77], "M2": ["B", "Mieres del Camín", 43.25, -5.77],

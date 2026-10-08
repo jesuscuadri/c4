@@ -494,7 +494,7 @@ def _resumen_alt(g, w, acc, llegadas):
             "retraso": ret, "con_datos": cd}
 
 
-def planificar(g, res, bus, origen, destino, ahora, en_vivo=True, horizonte=HORIZONTE):
+def planificar(g, res, bus, origen, destino, ahora, en_vivo=True, horizonte=HORIZONTE, con_alt=True):
     """Plan para salir ahora entre dos puntos (ya geocodificados), con trenes y autobuses."""
     est = g.est
     plan = {"origen": origen, "destino": destino, "ahora": round(ahora, 2), "hora_ahora": hm(ahora),
@@ -531,6 +531,9 @@ def planificar(g, res, bus, origen, destino, ahora, en_vivo=True, horizonte=HORI
         limpio = {k: plan[k] for k in ("origen", "destino", "ahora", "hora_ahora")}
         limpio.update({"ok": False, "etapas": [], "avisos": []})
         return P._plan_sin_tren(bus, origen, destino, ahora, en_vivo, limpio)
+    if not con_alt:
+        plan["alternativas"] = []
+        return plan
     # otras opciones: los viajes siguientes
     alt, desde, usados = [], sale, set()
     primero = next(x for x in v["tramos"] if not x.get("pie"))
@@ -553,6 +556,30 @@ def planificar(g, res, bus, origen, destino, ahora, en_vivo=True, horizonte=HORI
         alt.append(_resumen_alt(g, w, acc, llegadas))
     plan["alternativas"] = alt
     return plan
+
+
+def planificar_llegada(g, res, bus, origen, destino, limite, desde=0.0, en_vivo=False):
+    """Llegar antes de una hora: el viaje que sale más tarde y aun así llega a tiempo.
+    Se prueba el primer viaje posible y se va retrasando la salida mientras se siga llegando."""
+    t = max(desde, limite - 240.0)
+    mejor, primero = None, None
+    for _ in range(30):
+        p = planificar(g, res, bus, origen, destino, t, en_vivo=en_vivo, horizonte=max(60.0, limite - t + 60.0),
+                       con_alt=False)
+        if primero is None:
+            primero = p
+        if not p.get("ok") or "sale" not in p or "llega" not in p or p["llega"] > limite + 1e-6:
+            break
+        mejor = p
+        t = max(t + 1.0, p["sale"] + 1.0)
+    if mejor is None:
+        if primero.get("ok") and "llega" in primero:
+            primero = dict(primero, ok=False, error="No hay forma de llegar antes de las %s: lo más pronto llegas a las %s." % (
+                hm(limite), primero["llega_hm"]))
+        return primero
+    mejor["alternativas"] = []
+    mejor["limite_hm"] = hm(limite)
+    return mejor
 
 
 def trenes_de_horario(est, datos):

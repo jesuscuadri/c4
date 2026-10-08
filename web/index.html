@@ -99,6 +99,21 @@
         </div>
         <button id="ir-buscar" class="btn btn-cta">Cómo llego →</button>
       </div>
+      <div class="ir-cuando">
+        <label for="ir-modo">Cuándo</label>
+        <select id="ir-modo" aria-label="Cuándo">
+          <option value="ahora">Ahora</option>
+          <option value="salir">Salir a las…</option>
+          <option value="llegar">Llegar antes de las…</option>
+        </select>
+        <select id="ir-dia" aria-label="Día" hidden>
+          <option value="hoy">Hoy</option>
+          <option value="manana">Mañana</option>
+        </select>
+        <input id="ir-hora" type="time" aria-label="Hora" hidden>
+        <button id="ir-fav" class="btn btn-ico ir-fav" title="Guardar este viaje en favoritos" aria-label="Guardar en favoritos">☆</button>
+      </div>
+      <div class="ir-ej ir-favs" id="ir-favoritos" hidden></div>
       <div class="ir-ej" id="ir-ejemplos">
         <button data-o="EPI Gijón" data-d="Candás">EPI → Candás</button>
         <button data-o="Hospital de Cabueñes" data-d="Xivares">Cabueñes → Xivares</button>
