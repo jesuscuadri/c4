@@ -106,6 +106,53 @@ class Almacen:
             bruto = base64.b64decode(contenido)
         return json.loads(gzip.decompress(bruto).decode("utf-8"))
 
+    # ------------------------------------------------------------------ archivos sueltos (horarios de los buses)
+    def bajar_archivo(self, ruta):
+        """Contenido de un archivo de la rama de datos, o None si no existe (o no hay GitHub)."""
+        if not self.activo:
+            return None
+        try:
+            cod, info = self._api("GET", "/repos/%s/contents/%s?ref=%s" % (self.repo, ruta, self.rama))
+            if cod != 200 or not info:
+                return None
+            if info.get("content"):
+                return base64.b64decode(info["content"])
+            if info.get("download_url"):
+                req = urllib.request.Request(info["download_url"], headers={"Authorization": "Bearer " + self.token,
+                                                                            "User-Agent": "c4-tiempo-real"})
+                with urllib.request.urlopen(req, timeout=40) as r:
+                    return r.read()
+        except Exception as e:  # noqa: BLE001
+            print("Aviso: no se pudo bajar %s de GitHub: %s" % (ruta, e))
+        return None
+
+    def subir_archivo(self, ruta, datos, borrar_prefijo=None, conservar=()):
+        """Sube (o reemplaza) un archivo en la rama de datos. Con `borrar_prefijo`, quita de esa carpeta lo viejo
+        (todo lo que no esté en `conservar`) para que no se acumule."""
+        if not self.activo:
+            return False
+        try:
+            with self.lock:
+                self._asegurar_rama()
+                cod, info = self._api("GET", "/repos/%s/contents/%s?ref=%s" % (self.repo, ruta, self.rama))
+                cuerpo = {"message": "horario %s" % ruta, "content": base64.b64encode(datos).decode("ascii"),
+                          "branch": self.rama}
+                if cod == 200 and info and info.get("sha"):
+                    cuerpo["sha"] = info["sha"]
+                cod, _ = self._api("PUT", "/repos/%s/contents/%s" % (self.repo, ruta), cuerpo)
+                if cod not in (200, 201):
+                    raise RuntimeError("HTTP %s al subir %s" % (cod, ruta))
+                if borrar_prefijo:
+                    cod, lista = self._api("GET", "/repos/%s/contents/%s?ref=%s" % (self.repo, borrar_prefijo.rstrip("/"), self.rama))
+                    for f in (lista or []) if cod == 200 and isinstance(lista, list) else []:
+                        if f["path"] not in conservar and f["path"] != ruta:
+                            self._api("DELETE", "/repos/%s/contents/%s" % (self.repo, f["path"]),
+                                      {"message": "borra %s" % f["path"], "sha": f["sha"], "branch": self.rama})
+            return True
+        except Exception as e:  # noqa: BLE001
+            print("Aviso: no se pudo subir %s a GitHub: %s" % (ruta, e))
+            return False
+
     # ------------------------------------------------------------------ cargar (al arrancar)
     def cargar(self):
         """Recupera lo guardado y lo deja en el disco local (se mezcla con lo que ya hubiera)."""
