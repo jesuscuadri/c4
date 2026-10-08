@@ -27,7 +27,7 @@ async function pedir(url, ms = 12000) {
   try { return await (await fetch(url, { signal: ctl.signal })).json(); } finally { clearTimeout(t); }
 }
 const est = (k) => ESTL[k] || (RED && RED.estaciones[k]);
-const infoLinea = (c) => (RED && RED.lineas[c]) || { codigo: c, color: "#888", nombre: c };
+const infoLinea = (c) => (RED && (RED.lineas[c] || (RED.servicios || {})[c])) || { codigo: c, color: "#888", nombre: c };
 const colorLinea = (c) => infoLinea(c).color;
 const chipLinea = (c) => `<span class="chip-lin" style="background:${colorLinea(c)}">${esc(c)}</span>`;
 /* Nombre del sentido en la línea elegida: «Hacia Gijón», «Hacia Avilés / Pravia / Cudillero» */
@@ -71,13 +71,15 @@ function guardar(k, v) { try { localStorage.setItem("c4." + k, JSON.stringify(v)
 const guardarL = (k, v) => guardar(k + "." + LSEL, v);
 const leerL = (k, def) => leer(k + "." + LSEL, def);
 function leer(k, def) { try { const v = localStorage.getItem("c4." + k); return v == null ? def : JSON.parse(v); } catch (e) { return def; } }
-function destinoCorto(t) { return nombreCorto(t.destino); }
+function destinoCorto(t) { return nombreCorto(t.destino_real || t.destino); }
 /* Lo que importa de un tren es a dónde va, su retraso y cuándo llega a tu estación.
    El número (70311…) solo se muestra pequeño y en gris, por si hace falta cuadrarlo con Renfe. */
 const trenPorId = (id) => (R && R.trenes.find((x) => x.id === id)) || null;
 const hacia = (id) => { const t = trenPorId(id); return t ? "→ " + destinoCorto(t) : "otro tren"; };
 const elQueVa = (id) => { const t = trenPorId(id); return t ? "el que va a " + destinoCorto(t) : "otro tren"; };
 const numT = (n) => `<span class="num-t">${esc(n)}</span>`;
+// regionales (FEVE a Llanes, Ferrol…) y larga distancia: se marcan, porque llevan otro billete
+const numTren = (t) => (t.servicio ? `<span class="tag gris tag-serv" title="No es un Cercanías: ${esc(t.servicio)} (otro billete)">${esc(t.servicio)}</span>` : "") + numT(t.num);
 function miViaje() {
   const o = +$("o").value, d = +$("d").value;
   if (o === d) return null;
@@ -386,7 +388,7 @@ function pintarViaje() {
     return `<div class="tv${destacado ? " primero" : ""}${perdido ? " perdido" : ""}" data-tren="${t.id}" data-jo="${jo}" data-jd="${jd}">
       <div class="tv-cab">
         <div>
-          <div class="tv-tren"><span class="bola" style="background:${colorDir(t.dir)}"></span>→ ${esc(destinoCorto(t))}${tagEstado(t, jo)}${numT(t.num)}</div>
+          <div class="tv-tren"><span class="bola" style="background:${colorDir(t.dir)}"></span>→ ${esc(destinoCorto(t))}${tagEstado(t, jo)}${numTren(t)}</div>
           <div class="tv-sit">${esc(t.situacion)}${t.via && !t.material ? ` · vía ${esc(t.via)}` : ""}${fia ? ` · <span class="fia ${fia[0]}">${fia[1]}</span>` : ""}</div>
         </div>
         <div class="tv-grande"><div class="h num">${hmS(sal)}</div><div class="l">${cuando}</div><div class="l2">llega <b class="num">${hm(lle)}</b></div></div>
@@ -456,7 +458,7 @@ function pintarEstacion() {
         const retr = s - t.prog_d[j];
         return `<tr class="clic${aqui ? " aqui" : ""}" data-tren="${t.id}" data-jo="${j}">
           <td><span class="e">${hmS(s)}</span>${s - now < 60 ? `<div class="cuenta">${s - now < 1 ? "ya" : "en " + Math.floor(s - now) + " min"}</div>` : ""}${Math.abs(retr) >= 1 ? `<br><span style="color:var(--mut);text-decoration:line-through">${hm(t.prog_d[j])}</span>` : ""}</td>
-          <td>→ ${esc(destinoCorto(t))} ${numT(t.num)}${aqui ? `<br><span class="tag ok" style="margin:0">En andén${t.via ? " · vía " + esc(t.via) : ""}</span>` : ""}${t.material && j === 0 ? `<br><span style="font-size:12px;color:var(--tx2)">Aún no está: es el tren que llega de ${esc(nombreCorto(t.material.de))} a las ${hm(t.material.llega)}</span>` : ""}</td>
+          <td>→ ${esc(destinoCorto(t))} ${numTren(t)}${aqui ? `<br><span class="tag ok" style="margin:0">En andén${t.via ? " · vía " + esc(t.via) : ""}</span>` : ""}${t.material && j === 0 ? `<br><span style="font-size:12px;color:var(--tx2)">Aún no está: es el tren que llega de ${esc(nombreCorto(t.material.de))} a las ${hm(t.material.llega)}</span>` : ""}</td>
           <td>${tagEstado(t, j)}${mot ? `<br><span style="font-size:12px;color:var(--warn)">Espera ${Math.round(mot.min)} min${cr ? " · cruce con " + elQueVa(cr.ida.id === t.id ? cr.vuelta.id : cr.ida.id) : ""}</span>` : cr && (cr.ida.id === t.id ? cr.ida : cr.vuelta).espera >= 1 ? `<br><span style="font-size:12px;color:var(--tx2)">⇄ cruce aquí</span>` : ""}</td></tr>`;
       }).join("") + `</tbody></table>`;
   };
@@ -537,6 +539,7 @@ const trenMapa = (id) => { const F = fuenteMapa(); return (F && F.trenes.find((x
 function kmEnLinea(t, x) {
   for (let j = 0; j + 1 < t.k.length; j++) {
     if (x <= t.km[j + 1] || j + 2 === t.k.length) {
+      if (!ESTL[t.k[j]] || !ESTL[t.k[j + 1]]) return null;
       const a = est(t.k[j]).km, b = est(t.k[j + 1]).km;
       const f = Math.min(1, Math.max(0, (x - t.km[j]) / Math.max(1e-9, t.km[j + 1] - t.km[j])));
       return a + (b - a) * f;
@@ -828,7 +831,7 @@ function otrasLineasEstacion(k) {
   const botones = otras.map((l) => `<button type="button" class="sl mini" data-linea="${esc(l)}" style="--c:${colorLinea(l)}"><b>${esc(l)}</b><span>${esc(infoLinea(l).nombre)}</span></button>`).join("");
   if (!RT) { cargarTodas(); return `<div class="otras-lin"><h3>Otras líneas en ${esc(nombreCorto(e.nombre))}</h3><div class="sel-lineas">${botones}</div><div class="vacio">Cargando sus salidas…</div></div>`; }
   const l = salidasEn(RT.trenes, k, (t) => otras.includes(t.linea), 8);
-  const filas = l.map(({ t, j, h }) => `<tr><td><span class="e">${hmS(h)}</span></td><td>${chipLinea(t.linea)} → ${esc(destinoCorto(t))} ${numT(t.num)}</td><td>${tagEstado(t, j)}</td></tr>`).join("");
+  const filas = l.map(({ t, j, h }) => `<tr><td><span class="e">${hmS(h)}</span></td><td>${chipLinea(t.linea)} → ${esc(destinoCorto(t))} ${numTren(t)}</td><td>${tagEstado(t, j)}</td></tr>`).join("");
   return `<div class="otras-lin"><h3>Otras líneas en ${esc(nombreCorto(e.nombre))}</h3>` +
     (filas ? `<table class="tabla num"><thead><tr><th>Sale</th><th>Línea y destino</th><th>Estado</th></tr></thead><tbody>${filas}</tbody></table>` : `<div class="vacio">No quedan salidas hoy.</div>`) +
     `<div class="sel-lineas">${botones}</div></div>`;
@@ -882,7 +885,7 @@ function pintarFichaTren() {
   const proxCruce = (F.cruces || []).find((c) => (c.ida.id === t.id || c.vuelta.id === t.id) && c.hora >= ahora() - 0.5);
   f.hidden = false;
   const html = `<div class="ft-cab"><span class="ft-num" style="background:${colorLinea(t.linea)}">${esc(t.linea)}</span>
-      <div><b>→ ${esc(nombreCorto(t.destino))}</b>${numT(t.num)}<div class="pp-sub">${esc(t.situacion)}</div></div>
+      <div><b>→ ${esc(nombreCorto(t.destino))}</b>${numTren(t)}<div class="pp-sub">${esc(t.situacion)}</div></div>
       <button type="button" class="ft-x" id="ft-cerrar" aria-label="Cerrar">×</button></div>
     <div class="ft-datos num">
       <div><span class="pp-sub">${t.parado ? "Sale de" : "Próxima"}</span><b>${esc(nombreCorto(sig))} ${hm(t.parado ? t.est_d[j] : t.est_a[j])}</b></div>
@@ -1157,6 +1160,7 @@ function pintarMalla() {
   const camino = (t, A, D, desde, sinLlegada0) => {
     const p = [];
     for (let j = desde; j < t.k.length; j++) {
+      if (IDX[t.k[j]] == null) continue;           // estación que no es de esta línea (regionales)
       if (A[j] != null && !(sinLlegada0 && j === desde)) p.push([x(A[j]), y(t.k[j])]);
       if (D[j] != null && Math.abs(D[j] - A[j]) > 0.01) p.push([x(D[j]), y(t.k[j])]);
     }
@@ -1366,6 +1370,7 @@ function pintarInfo() {
   <ul>
     <li><b>Cruces.</b> Los saca del propio horario oficial: dónde coinciden dos trenes de sentido contrario. Un tren no sale del apartadero hasta que ha entrado el contrario. Si uno de los dos ya pasó la estación prevista, busca el siguiente apartadero donde pueden cruzarse.</li>
     <li><b>Vía única en cabeceras.</b> En las cabeceras de vía única (Cudillero, Laviana, Collanzo, San Esteban…), un tren no sale hasta que ha llegado el que venía de frente por ese tramo.</li>
+    <li><b>Trenes regionales y de larga distancia.</b> Los FEVE a Llanes, Santander y Ferrol, el regional de León y los Alvia usan las mismas vías. Se tienen en cuenta con su retraso en directo, porque si uno de ellos va tarde, el Cercanías que tiene que cruzarse con él espera. También aparecen en los horarios, marcados como «Regional» (llevan otro billete).</li>
     <li><b>Tren de delante.</b> No se entra en un tramo mientras el tren anterior del mismo sentido no haya llegado al siguiente apartadero.</li>
     <li><b>Rotaciones.</b> El tren que sale de cabecera suele ser el que acaba de llegar. Si Renfe indica la vía, se usa para saber cuál es.</li>
     <li><b>Márgenes del horario.</b> Nunca sale antes de su hora. Si va tarde, puede recortar las esperas que ya trae el horario, y así se ve cuándo recupera tiempo.</li>
@@ -1424,7 +1429,7 @@ function pintarCajon() {
       <td>${e.cruce ? "<b>" : ""}${esc(e.nombre)}${e.cruce ? "</b>" : ""}${notas}</td>
       <td>${hm(hProg)}</td><td class="col-of">${pasado ? "" : hm(hApp)}</td><td class="e">${pasado ? "" : (salida ? hmS(hEst) : hm(hEst))}${!pasado && salida && j > 0 ? `<div class="sub" style="font-weight:400">sale</div>` : ""}</td></tr>`);
   }
-  $("cajon").innerHTML = `<div class="cajon-cab"><div><h2>→ ${esc(destinoCorto(t))} ${numT(t.num)}</h2>
+  $("cajon").innerHTML = `<div class="cajon-cab"><div><h2>→ ${esc(destinoCorto(t))} ${numTren(t)}</h2>
       <div style="color:var(--tx2)">${esc(t.origen)} → ${esc(t.destino)}</div></div>
       <button class="cerrar" id="cerrar" aria-label="Cerrar">×</button></div>
     <div class="datos">${chipLinea(t.linea || LSEL)}<span class="tag ${t.dir > 0 ? "ida" : "vta"}" style="margin:0">${esc(t.linea === LSEL ? nombreDir(t.dir) : "→ " + destinoCorto(t))}</span>

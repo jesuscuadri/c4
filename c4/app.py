@@ -74,11 +74,23 @@ class App:
             return
         datos = gtfs.extraer_red(self.cfg, hoy)
         self.aprender()
+        reg = None
+        if self.cfg.get("regionales", True):
+            try:
+                reg = gtfs.extraer_regionales(self.cfg, hoy, set(datos["paradas"]))
+                print("Regionales y larga distancia por la red: %d trenes" % len(reg["viajes"]))
+            except Exception as e:  # noqa: BLE001
+                print("Aviso: sin trenes regionales (%s)" % e)
+        self.tipos_reg = (reg or {}).get("tipos", {})
+        self.tipos_num = {tp[1]: tp for tp in self.tipos_reg.values()}
         redes = {}
         for nombre, conf in self.cfg["redes"].items():
             dg = gtfs.separar_por_grupo(datos, set(conf["lineas"]))
             if not dg["viajes"]:
                 continue
+            dg["regionales"] = sorted(self.tipos_num)
+            if reg:
+                _anadir_regionales(dg, datos, reg, metrico=any(lin in ("C4", "C5", "C6", "C7", "C8") for lin in conf["lineas"]))
             cfg_r = dict(self.cfg)
             cfg_r["via_doble_si_coinciden"] = conf.get("via_doble_si_coinciden", 3)
             red = Red(cfg_r, dg)
@@ -104,20 +116,47 @@ class App:
                 g["redes"].append(nombre)
                 g["cruce"] = g["cruce"] or k in red.apartaderos
                 r["glob"].append(glob[s])
+            lineas_cer = set(self.cfg["redes"][nombre]["lineas"])
             for v in red.viajes.values():
                 for k in v.k:
-                    estaciones[r["glob"][k]]["lineas"].add(v.linea)
+                    if v.linea in lineas_cer:
+                        estaciones[r["glob"][k]]["lineas"].add(v.linea)
+                    elif v.pos.get(k) is not None and v.para[v.pos[k]]:
+                        estaciones[r["glob"][k]].setdefault("servicios", set()).add(v.linea)
         for e in estaciones:
             e["lineas"] = sorted(e["lineas"], key=_orden_linea)
+            if "servicios" in e:
+                e["servicios"] = sorted(e["servicios"])
+        # Regionales que pasan por cada línea, con su sentido respecto a ella (para enseñarlos en
+        # los horarios de esa línea: también se pueden coger)
+        extra = {}
+        for nombre, r in redes.items():
+            red = r["red"]
+            for lin, eje in red.ejes.items():
+                if lin not in self.cfg["redes"][nombre]["lineas"]:
+                    continue
+                pos = {k: i for i, k in enumerate(list(eje["nodos"]))}
+                otros = set(eje["otros"])
+                for v in red.viajes.values():
+                    if v.linea in self.cfg["redes"][nombre]["lineas"]:
+                        continue
+                    com = [k for j, k in enumerate(v.k) if v.para[j] and (k in pos or k in otros)]
+                    if len(com) >= 2:
+                        en_eje = [k for k in com if k in pos]
+                        d = 1 if len(en_eje) < 2 or pos[en_eje[-1]] > pos[en_eje[0]] else -1
+                        extra.setdefault(lin, {})[v.id] = d
         with self.lock:
             self.redes = redes
             self.estaciones = estaciones
             self.glob = glob
+            self.extra_linea = extra
             # compatibilidad: «la línea» (planificador, mañana...) es la red de la línea principal
             principal = next((r for r in redes.values() if self.cfg["linea"] in r["red"].ejes),
                              next(iter(redes.values())))
             self.linea, self.est = principal["red"], principal["est"]
             self.rt = TiempoReal(self.cfg)
+            self.rt.alias_ld = {v.num: v.id for r in redes.values() for v in r["red"].viajes.values()
+                                if v.num.isdigit() and v.linea not in ("R", "LD")}
             self.precision = Precision()
             self.dia = hoy
             self.estaciones_plan = planificador.Estaciones(estaciones)
@@ -137,6 +176,8 @@ class App:
                 if a < b:
                     tramos["%d-%d" % (G[a], G[b])] = [[round(x, 5), round(y, 5)] for x, y in _simplificar(geo, 0.004)]
             for lin, eje in red.ejes.items():
+                if lin not in self.cfg["redes"][nombre]["lineas"]:
+                    continue
                 nodos = eje["nodos"]
                 usados = []
                 vistos = set()
@@ -160,7 +201,9 @@ class App:
                 }
         return {"version": VERSION, "fecha": self.dia.isoformat(), "linea_defecto": self.cfg["linea"],
                 "lineas": dict(sorted(lineas.items(), key=lambda kv: _orden_linea(kv[0]))),
-                "estaciones": self.estaciones, "tramos": tramos, "url_movil": self.url_movil}
+                "estaciones": self.estaciones, "tramos": tramos, "url_movil": self.url_movil,
+                "servicios": {"R": {"codigo": "R", "nombre": "Regional", "color": "#64748b"},
+                              "LD": {"codigo": "LD", "nombre": "Larga distancia", "color": "#475569"}}}
 
     def _linea_json(self, codigo=None):
         """Una línea como la veía la app cuando solo había la C-4: estaciones del eje con sus km."""
@@ -236,6 +279,11 @@ class App:
                 t.pop("_bruta_a", None)
                 t.pop("_bruta_d", None)
                 t["km"] = [round(x, 3) for x in r["red"].viajes[t["id"]].km]
+                tr = self.tipos_reg.get(t["id"]) or self.tipos_num.get(t["num"])
+                if tr:
+                    t["servicio"] = tr[0].title() if tr[0] != "MD" else "Media Distancia"
+                    if len(tr) > 3 and tr[3]:
+                        t["origen_real"], t["destino_real"] = tr[2], tr[3]
                 t["k"] = [G[k] for k in t["k"]]
                 for m in t["motivos"]:
                     m["k"] = G[m["k"]]
@@ -341,9 +389,14 @@ class App:
         quiero = set(lineas.split(",")) if lineas and lineas != "todas" else None
         ahora, vent = res["ahora"], self.cfg.get("ventana_estado_min", 240)
         trenes = []
+        extra = getattr(self, "extra_linea", {})
+        una = next(iter(quiero)) if quiero is not None and len(quiero) == 1 else None
         for t in res["trenes"]:
             if quiero is not None and t["linea"] not in quiero:
-                continue
+                if una and t["id"] in extra.get(una, {}):
+                    t = dict(t, dir=extra[una][t["id"]])     # regional por esta línea: con su sentido en ella
+                else:
+                    continue
             ini = t["est_d"][0] if t["est_d"][0] is not None else t["prog_d"][0]
             fin = t["est_a"][-1] if t["est_a"][-1] is not None else t["prog_a"][-1]
             if fin < ahora - 15 or ini > ahora + vent:
@@ -795,3 +848,31 @@ def mantener_despierto(url):
                 http_get(url.rstrip("/") + "/api/ping", timeout=30)
             except Exception as e:  # noqa: BLE001
                 print("Aviso (despertar):", e)
+
+
+def _anadir_regionales(dg, datos, reg, metrico):
+    """Mete en una red (ancho métrico o ibérico) los regionales que van por ella."""
+    nums = dg.setdefault("nums", {})
+    # los que ya vienen en el horario de Cercanías (los FEVE 718xx como C6/C7, el 12100 como C1) no se
+    # duplican: su tiempo real se les asigna por el número (ver TiempoReal.alias_ld)
+    ya = set()
+    for d in (datos["viajes"],):
+        for t in d:
+            dig = "".join(c if c.isdigit() else " " for c in t[5:]).split()
+            if dig:
+                ya.add(dig[0])
+    for tid, filas in reg["viajes"].items():
+        es_met = any(s_.startswith("05") for s_, _, _ in filas)
+        if es_met != metrico:
+            continue
+        if not metrico and any(s_ not in dg["paradas"] for s_, _, _ in filas):
+            continue
+        tipo = (reg.get("tipos", {}).get(tid) or ["REGIONAL", tid[:5]])
+        if tipo[1] in ya:
+            continue
+        dg["viajes"][tid] = filas
+        dg["lineas"][tid] = "R" if tipo[0] in gtfs.TIPOS_REGIONAL else "LD"
+        nums[tid] = tipo[1]
+        for s_, _, _ in filas:
+            if s_ not in dg["paradas"] and s_ in datos["paradas"]:
+                dg["paradas"][s_] = datos["paradas"][s_]

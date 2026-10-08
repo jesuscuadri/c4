@@ -539,3 +539,4 @@ h2 .num-t{font-size:13px}
 .cajon-acc{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 10px}
 @media (max-width:480px){.tabla-caj .col-of{display:none}}
 .cuenta{font-size:12px;color:var(--c4);font-weight:700}
+.tag-serv{font-size:10.5px;padding:0 5px;margin:0 4px 0 2px}

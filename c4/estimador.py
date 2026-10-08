@@ -349,7 +349,8 @@ class Estimador:
                 q = rt.pos.get(ant.id)
                 if (ant is not sig and q and q.get("via") == p["via"] and q["stop"] == p["stop"]
                         and q["estado"] != "STOPPED_AT" and ant.k[-1] == sig.k[0]
-                        and getattr(ant, "linea", "") == getattr(sig, "linea", "")):
+                        and getattr(ant, "linea", "") == getattr(sig, "linea", "")
+                        and getattr(sig, "linea", "") not in ("R", "LD")):
                     out.append((ant, sig))
         return out
 
@@ -370,13 +371,15 @@ class Estimador:
         estatica = {sig.id: (ant, m) for ant, sig, m in self.L.rotaciones if vivo(ant)}
         reservado = {ant.id for ant, _ in estatica.values()}
         out, usados = [], set()
-        for sig in sorted((v for v in viajes if not estados[v.id]["cancelado"]), key=lambda v: v.sd[0]):
+        regs = getattr(self.L, "regionales", set())
+        for sig in sorted((v for v in viajes if not estados[v.id]["cancelado"]
+                           and linea(v) not in ("R", "LD") and v.num not in regs), key=lambda v: v.sd[0]):
             K, sd = sig.k[0], sig.sd[0]
 
             def libres(hasta):
                 return sorted(((A0[a.id][-1], a) for a in viajes
                                if a.k[-1] == K and a is not sig and vivo(a) and a.id not in usados
-                               and a.id not in reservado and linea(a) == linea(sig)
+                               and a.id not in reservado and linea(a) == linea(sig) and a.num not in regs
                                and sd - 180 <= A0[a.id][-1] <= hasta), key=lambda x: x[0])
             e = estatica.get(sig.id)
             elegido = None

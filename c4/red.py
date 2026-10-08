@@ -24,6 +24,11 @@ from collections import Counter, defaultdict
 from .util import distancia_km, normaliza
 
 
+# Regionales y larga distancia: solo se tiene el trozo que va por la red de Cercanías, así que sus
+# «cabeceras» aquí no son de verdad (siguen hasta Llanes, Ferrol, León...): no dan la vuelta.
+SIN_ROTACION = ("R", "LD")
+
+
 class Viaje:
     """Un tren del día. Su recorrido cubre todas las estaciones por las que pasa (las que no
     tienen parada comercial se interpolan por distancia)."""
@@ -62,6 +67,8 @@ class Red:
         lin_de = datos.get("lineas", {})
         defecto = cfg.get("linea", "")
         self.linea_de = {tid: lin_de.get(tid, defecto) for tid in raw}
+        self.nums = datos.get("nums", {})          # número de tren cuando no sale del trip_id (regionales)
+        self.regionales = set(datos.get("regionales", []))   # números de regionales (no dan la vuelta aquí)
         # ---- nodos: en el orden en que aparecen en los recorridos más largos (empezando por Gijón)
         largos = sorted(raw.values(), key=len, reverse=True)
         orden, vistos = [], set()
@@ -197,6 +204,8 @@ class Red:
         if len(filas) < 2:
             return None
         v = Viaje(tid, self.linea_de.get(tid, ""))
+        if tid in self.nums:
+            v.num = self.nums[tid]
         for n, (s, a, d) in enumerate(filas):
             k = self.idx[s]
             if n > 0:
@@ -454,7 +463,9 @@ class Red:
         usados = set()
         for sig in sorted(self.viajes.values(), key=lambda v: v.sd[0]):
             opciones = [a for a in finales if a.id not in usados and a.k[-1] == sig.k[0] and a is not sig
-                        and a.linea == sig.linea and 2 <= sig.sd[0] - a.sa[-1] <= 90]
+                        and a.linea == sig.linea and 2 <= sig.sd[0] - a.sa[-1] <= 90
+                        and sig.linea not in SIN_ROTACION
+                        and sig.num not in self.regionales and a.num not in self.regionales]
             if opciones:
                 ant = opciones[0]
                 usados.add(ant.id)

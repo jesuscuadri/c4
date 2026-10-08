@@ -46,7 +46,10 @@ MODELO_DESDE = "20260927"
 
 
 def num_servicio(tid):
-    """70208 a partir de «2064X70208C4» (el número del servicio se repite cada día)."""
+    """70208 a partir de «2064X70208C4» (el número del servicio se repite cada día).
+    Los regionales y de larga distancia van como «7182112026-10-07»: número + 1 + fecha."""
+    if len(tid) == 16 and tid[5] == "1" and tid[10] == "-" and tid[:5].isdigit():
+        return tid[:5]
     dig = "".join(c if c.isdigit() else " " for c in tid[5:]).split()
     return dig[0] if dig else tid
 
@@ -236,7 +239,9 @@ CABECERA_PRECISION = ["fecha", "trip", "stop", "horizonte", "nuestra", "adif", "
 
 
 def linea_de(tid):
-    """«C4» a partir de «2078X70208C4»."""
+    """«C4» a partir de «2078X70208C4» (los regionales, «R»)."""
+    if len(tid) == 16 and tid[10] == "-":
+        return "R"
     i = tid.rfind("C")
     return tid[i:] if i > 4 else ""
 

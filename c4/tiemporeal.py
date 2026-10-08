@@ -28,6 +28,9 @@ def http_get_cond(url, desde=None, timeout=20):
 RT_POSICIONES = "https://gtfsrt.renfe.com/vehicle_positions.json"
 RT_ACTUALIZACIONES = "https://gtfsrt.renfe.com/trip_updates.json"
 RT_AVISOS = "https://gtfsrt.renfe.com/alerts.json"
+# Regionales y larga distancia (FEVE Oviedo–Llanes, Oviedo–Ferrol, Alvia…): mismo formato
+RT_POSICIONES_LD = "https://gtfsrt.renfe.com/vehicle_positions_LD.json"
+RT_ACTUALIZACIONES_LD = "https://gtfsrt.renfe.com/trip_updates_LD.json"
 
 
 class TiempoReal:
@@ -47,6 +50,10 @@ class TiempoReal:
         self.coord_vista = {}    # trip -> ((lat, lon), minuto en que apareció esa coordenada)
         self._cache = {}         # url -> (datos, Last-Modified) para no descargar lo que no ha cambiado
         self._avisos_json = None
+        # número de tren -> trip_id de Cercanías. Los regionales FEVE (718xx) y el regional de León
+        # vienen en el horario de Cercanías como C6/C7/C1, pero su tiempo real está en el fichero de
+        # larga distancia con otro identificador («7182112026-10-07»): sin esto iban sin datos.
+        self.alias_ld = {}
         self._t_avisos = 0.0
 
     # ------------------------------------------------------------------
@@ -88,6 +95,20 @@ class TiempoReal:
         n = max(1, int((time.time() - t) // per) + 1)
         return t + n * per
 
+    def _alias(self, entidades, clave):
+        if not self.alias_ld:
+            return entidades
+        out = []
+        for e in entidades:
+            x = e.get(clave) or {}
+            tid = (x.get("trip") or {}).get("tripId", "")
+            nuevo = self.alias_ld.get(tid[:5]) if len(tid) == 16 and tid[10] == "-" else None
+            if nuevo:
+                x = dict(x, trip=dict(x.get("trip") or {}, tripId=nuevo))
+                e = dict(e, **{clave: x})
+            out.append(e)
+        return out
+
     def hay_novedades(self):
         """¿Ha publicado Renfe posiciones nuevas? (petición casi gratis: normalmente un 304)."""
         try:
@@ -102,6 +123,14 @@ class TiempoReal:
         except Exception as e:  # noqa: BLE001
             self.error = "No se pudo leer el tiempo real de Renfe (%s)" % e
             return False
+        if self.cfg.get("regionales", True):
+            try:
+                pl, _ = self._leer(RT_POSICIONES_LD, 10)
+                ul, _ = self._leer(RT_ACTUALIZACIONES_LD, 10)
+                p = dict(p, entity=(p.get("entity") or []) + self._alias(pl.get("entity") or [], "vehicle"))
+                u = dict(u, entity=(u.get("entity") or []) + self._alias(ul.get("entity") or [], "tripUpdate"))
+            except Exception:  # noqa: BLE001  (sin regionales se sigue igual)
+                pass
         a = None
         if time.time() - self._t_avisos > 60 or self._avisos_json is None:   # los avisos cambian poco
             try:
