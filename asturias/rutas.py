@@ -524,6 +524,23 @@ def planificar(g, res, bus, origen, destino, ahora, en_vivo=True, horizonte=HORI
             _corto(origen["nombre"]), _corto(destino["nombre"]))
         plan["sin_servicio_hoy"] = True
         return plan
+    # si llegando a la misma hora se puede salir más tarde, mejor: menos esperas por el camino
+    n_veh = lambda x: sum(1 for t in x["tramos"] if not t.get("pie"))  # noqa: E731
+    p_v = next(x for x in v["tramos"] if not x.get("pie"))
+    s_v = _sale(g, p_v)
+    for _ in range(6):
+        listo2 = {k: max(h, s_v + 0.5) for k, h in listo.items()}
+        w = raptor(g, trenes, listo2, llegadas, ahora, horizonte=horizonte)
+        if w is None or w["llega"] > v["llega"] + 0.5 or n_veh(w) > n_veh(v):
+            break
+        p_w = next(x for x in w["tramos"] if not x.get("pie"))
+        s_w = _sale(g, p_w)
+        if s_w <= s_v:
+            break
+        if _clave(p_w) == _clave(p_v):          # el mismo vehículo subiendo en una parada posterior: no cuenta
+            s_v = s_w
+            continue
+        v, s_v, p_v = w, s_w, p_w
     sale = _montar(g, plan, v, acc, sal, ahora, est)
     # si andando se llega antes que con todo esto (sitios cercanos), mejor andar
     andando = minutos_andando(dist_od)

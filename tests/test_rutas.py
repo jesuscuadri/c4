@@ -101,6 +101,19 @@ class TestRutas(unittest.TestCase):
         origen2 = dict(origen, nodos=[999, 1000])
         self.assertIsNotNone(rutas.primero_manana(rutas.Grafo(EST, {"interurbano": red_bus()}), trenes, origen2, destino))
 
+    def test_sale_lo_mas_tarde_posible(self):
+        # dos buses llegan a la vez a la estación para el mismo tren: se elige el que sale más tarde
+        d = red_bus()
+        d["viajes"].append([0, 620, 0])            # L1 también a las 10:20 (llega 10:50 a S3)
+        g = rutas.Grafo(EST, {"interurbano": d})
+        origen = g.punto_localidad("Villabus")
+        destino = {"lat": 43.5005, "lon": -5.5505, "nombre": "Casa", "tipo": "gps"}
+        res = {"trenes": [tren("T1", 660, 690)]}   # sale 11:00: sirven el bus de las 10:00 y el de las 10:20
+        p = rutas.planificar(g, res, None, origen, destino, ahora=580)
+        self.assertTrue(p["ok"], p)
+        bus = next(e for e in p["etapas"] if e["tipo"] == "autobus")
+        self.assertEqual(bus["sale_hm"], "10:20")
+
     def test_llegar_antes_de(self):
         origen = self.g.punto_localidad("Villabus")
         destino = {"lat": 43.5005, "lon": -5.5505, "nombre": "Casa", "tipo": "gps"}
