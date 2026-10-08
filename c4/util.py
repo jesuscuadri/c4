@@ -32,12 +32,20 @@ CONFIG_DEFECTO = {
     # sentido contrario en mitad de un tramo para darlo por vía doble. En ancho ibérico el horario no
     # tiene esas rarezas (1 basta); en el métrico la C-4 tiene 1-2 al día en vía única (El Parador–Soto).
     "redes": {
-        "metrico": {"lineas": ["C4", "C5", "C5a", "C6", "C7", "C8"], "via_doble_si_coinciden": 3},
-        "iberico": {"lineas": ["C1", "C2", "C3"], "via_doble_si_coinciden": 1},
+        "metrico": {"lineas": ["C4", "C5", "C5a", "C6", "C7", "C8"], "otras": ["RE", "RO"], "via_doble_si_coinciden": 3},
+        "iberico": {"lineas": ["C1", "C2", "C3"], "otras": ["RL", "LD"], "via_doble_si_coinciden": 1},
     },
+    # Lo que no es Cercanías, en sus apartados: regionales (FEVE y Renfe) y AVE / larga distancia
+    "categorias": [["cercanias", "Cercanías", ["C1", "C2", "C3", "C4", "C5", "C5a", "C6", "C7", "C8"]],
+                   ["regional", "Regionales", ["RE", "RO", "RL"]],
+                   ["larga", "AVE y larga distancia", ["LD"]]],
+    "nombres_lineas": {"RE": "Oviedo – Infiesto · a Llanes y Santander",
+                       "RO": "Oviedo – Cudillero · a Ferrol",
+                       "RL": "Gijón – Pola de Lena · a León",
+                       "LD": "AVE, Alvia y Avlo · Gijón – Oviedo – Lena"},
     "colores_lineas": {"C1": "#e2231a", "C2": "#1d70b8", "C3": "#00965e", "C4": "#e93cac",
                        "C5": "#f39200", "C5a": "#c77d00", "C6": "#7b3f98", "C7": "#00a3e0",
-                       "C8": "#8a6d3b"},
+                       "C8": "#8a6d3b", "RE": "#0f766e", "RO": "#0369a1", "RL": "#4d7c0f", "LD": "#6d28d9"},
     "ventana_estado_min": 240,          # trenes que se mandan al móvil: los que circulan y los de las próximas 4 h
     "puerto": 8765,
     "intervalo_consulta_s": 20,         # recalcular al menos cada 20 s

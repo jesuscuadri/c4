@@ -350,7 +350,7 @@ class Estimador:
                 if (ant is not sig and q and q.get("via") == p["via"] and q["stop"] == p["stop"]
                         and q["estado"] != "STOPPED_AT" and ant.k[-1] == sig.k[0]
                         and getattr(ant, "linea", "") == getattr(sig, "linea", "")
-                        and getattr(sig, "linea", "") not in ("R", "LD")):
+                        and getattr(sig, "linea", "") not in ("R", "LD", "RE", "RO", "RL")):
                     out.append((ant, sig))
         return out
 
@@ -373,7 +373,7 @@ class Estimador:
         out, usados = [], set()
         regs = getattr(self.L, "regionales", set())
         for sig in sorted((v for v in viajes if not estados[v.id]["cancelado"]
-                           and linea(v) not in ("R", "LD") and v.num not in regs), key=lambda v: v.sd[0]):
+                           and linea(v) not in ("R", "LD", "RE", "RO", "RL") and v.num not in regs), key=lambda v: v.sd[0]):
             K, sd = sig.k[0], sig.sd[0]
 
             def libres(hasta):

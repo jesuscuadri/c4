@@ -540,3 +540,23 @@ h2 .num-t{font-size:13px}
 @media (max-width:480px){.tabla-caj .col-of{display:none}}
 .cuenta{font-size:12px;color:var(--c4);font-weight:700}
 .tag-serv{font-size:10.5px;padding:0 5px;margin:0 4px 0 2px}
+/* elegir tren o bus al entrar */
+.elegir{position:fixed;inset:0;z-index:5000;background:var(--bg);display:grid;place-items:center;padding:24px calc(18px + env(safe-area-inset-right)) calc(24px + env(safe-area-inset-bottom)) calc(18px + env(safe-area-inset-left))}
+.elegir[hidden]{display:none}
+.el-in{width:100%;max-width:440px;display:flex;flex-direction:column;gap:14px}
+.el-marca{color:var(--mut);font-weight:700;font-size:13px;letter-spacing:.4px;text-transform:uppercase}
+.el-tit{font-size:28px;margin:0 0 8px;line-height:1.15}
+.el-op{display:flex;align-items:center;gap:16px;text-align:left;border:1.5px solid var(--bd);background:var(--panel);color:var(--tx);border-radius:20px;padding:22px 20px;cursor:pointer;box-shadow:var(--sombra)}
+.el-op b{display:block;font-size:22px}
+.el-op small{display:block;color:var(--tx2);font-size:14px;margin-top:3px}
+.el-op .el-ic{font-size:40px;line-height:1}
+.el-op .el-fl{margin-left:auto;font-size:28px;color:var(--mut)}
+.el-tren:hover,.el-tren:focus-visible{border-color:#e93cac}.el-bus:hover,.el-bus:focus-visible{border-color:#dc2626}
+.el-op:active{transform:scale(.98)}
+.el-rec{color:var(--tx2);font-size:14px;display:flex;gap:8px;align-items:center;margin-top:4px}
+/* apartados de tren */
+.sel-cats{max-width:1180px;margin:auto;padding:2px 12px 4px;display:flex;gap:4px;overflow-x:auto;scrollbar-width:none}
+.sel-cats::-webkit-scrollbar{display:none}
+.sc{flex:0 0 auto;border:0;background:none;color:var(--tx2);font-weight:700;font-size:13.5px;padding:6px 12px;border-radius:99px;cursor:pointer;white-space:nowrap}
+.sc.on{background:var(--tx);color:var(--bg)}
+.pie-link{color:var(--c4);font-weight:600;text-decoration:none}

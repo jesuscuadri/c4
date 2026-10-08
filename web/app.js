@@ -79,7 +79,7 @@ const hacia = (id) => { const t = trenPorId(id); return t ? "→ " + destinoCort
 const elQueVa = (id) => { const t = trenPorId(id); return t ? "el que va a " + destinoCorto(t) : "otro tren"; };
 const numT = (n) => `<span class="num-t">${esc(n)}</span>`;
 // regionales (FEVE a Llanes, Ferrol…) y larga distancia: se marcan, porque llevan otro billete
-const numTren = (t) => (t.servicio ? `<span class="tag gris tag-serv" title="No es un Cercanías: ${esc(t.servicio)} (otro billete)">${esc(t.servicio)}</span>` : "") + numT(t.num);
+const numTren = (t) => (t.servicio && infoLinea(LSEL).categoria === "cercanias" ? `<span class="tag gris tag-serv" title="No es un Cercanías: ${esc(t.servicio)} (otro billete)">${esc(t.servicio)}</span>` : "") + numT(t.num);
 function miViaje() {
   const o = +$("o").value, d = +$("d").value;
   if (o === d) return null;
@@ -131,14 +131,21 @@ function pintarCabecera() {
   pill.textContent = LSEL; pill.style.background = L.color;
   $("titulo-linea").textContent = L.nombre;
   document.title = `${LSEL} ${L.nombre} · Cercanías Asturias`;
-  $("sel-lineas").innerHTML = Object.values(RED.lineas).map((l) =>
+  // apartados: Cercanías / Regionales / AVE y larga distancia; debajo, las líneas del apartado
+  const cats = (RED.categorias || []).filter((c) => c.lineas.length);
+  const catSel = L.categoria || "cercanias";
+  $("sel-cats").innerHTML = cats.length > 1 ? cats.map((c) =>
+    `<button type="button" role="tab" class="sc${c.id === catSel ? " on" : ""}" data-cat="${esc(c.id)}" aria-selected="${c.id === catSel}">${esc(c.nombre)}</button>`).join("") : "";
+  $("sel-cats").hidden = cats.length <= 1;
+  const enCat = (cats.find((c) => c.id === catSel) || {}).lineas || Object.keys(RED.lineas);
+  $("sel-lineas").innerHTML = enCat.map((c) => RED.lineas[c]).filter(Boolean).map((l) =>
     `<button type="button" class="sl${l.codigo === LSEL ? " on" : ""}" data-linea="${esc(l.codigo)}" style="--c:${l.color}" title="${esc(l.nombre)}"><b>${esc(l.codigo)}</b><span>${esc(l.nombre)}</span></button>`).join("");
   for (const x of document.querySelectorAll(".dir-ida")) x.textContent = nombreDir(1);
   for (const x of document.querySelectorAll(".dir-vta")) x.textContent = nombreDir(-1);
 }
 async function cambiarLinea(c) {
   if (c === LSEL || !RED.lineas[c]) return;
-  LSEL = c; guardar("linea", c);
+  LSEL = c; guardar("linea", c); guardar("linea." + (RED.lineas[c].categoria || "cercanias"), c);
   R = null; pintarTrenesMapa._cruces = null; PREC = APREN = null;
   await cargarLinea();
   iniciarSelectores();
@@ -237,8 +244,8 @@ function pintarEstado() {
     h += `<div class="aviso bad" title="${esc(R.error || "")}"><span>⚠</span><div><b>No se puede leer el tiempo real de Renfe ahora mismo.</b> Mientras tanto se muestra el horario oficial; en cuanto vuelva, se actualiza solo.</div></div>`;
   for (const a of R.avisos || []) h += `<div class="aviso info"><span>ℹ</span><div><b>Aviso de Renfe:</b> ${esc(a)}</div></div>`;
   $("avisos").innerHTML = h;
-  $("pie").textContent = `Datos: Renfe (horario oficial GTFS y tiempo real) · actualizado ${R.actualizado} · ` +
-    `${LINEA.n_trenes} trenes hoy · cruces ${R.modo_cruces} · ${R.tramos_aprendidos} tramos con tiempos aprendidos · v${LINEA.version}`;
+  $("pie").innerHTML = `<a href="/?elegir" class="pie-link">🚆/🚌 Elegir tren o bus al entrar</a><br>` + esc(`Datos: Renfe (horario oficial GTFS y tiempo real) · actualizado ${R.actualizado} · ` +
+    `${LINEA.n_trenes} trenes hoy · cruces ${R.modo_cruces} · ${R.tramos_aprendidos} tramos con tiempos aprendidos · v${LINEA.version}`);
 }
 
 /* ---------------------------------------------------------------- mi viaje */
@@ -433,7 +440,9 @@ function dibujarBus(d, j) {
 /* ---------------------------------------------------------------- panel de estación */
 function pintarEstacion() {
   const k = +$("est").value, e = est(k), now = ahora();
-  $("est-info").innerHTML = e.cruce && !e.cruces_dia
+  $("est-info").innerHTML = infoLinea(LSEL).categoria && infoLinea(LSEL).categoria !== "cercanias"
+    ? (e.cruce ? `<span class="tag warn" style="margin:0 6px 0 0">Vía de cruce</span>` : "") + `Horarios de ${esc(infoLinea(LSEL).nombre)}. No son Cercanías: llevan su propio billete.`
+    : e.cruce && !e.cruces_dia
     ? `<span class="tag warn" style="margin:0 6px 0 0">Cabecera</span>Aquí empiezan y terminan trenes: el que sale suele ser el mismo que acaba de llegar, dando la vuelta.`
     : e.cruce
     ? `<span class="tag warn" style="margin:0 6px 0 0">Vía de cruce</span>Aquí se cruzan trenes unas ${e.cruces_dia} veces al día según el horario.`
@@ -587,7 +596,8 @@ function pintarLineasMapa() {
   if (!mapa || !capaLineas) return;
   capaLineas.clearLayers(); capaEst.clearLayers();
   marcaEst = {}; etiquetasEst = [];
-  const lins = Object.values(RED.lineas).filter((l) => MAPA_TODAS || l.codigo === LSEL);
+  // con «todas», las vías de Cercanías (los regionales van por ellas) y la línea elegida
+  const lins = Object.values(RED.lineas).filter((l) => l.codigo === LSEL || (MAPA_TODAS && (l.categoria || "cercanias") === "cercanias"));
   lins.sort((a, b) => (a.codigo === LSEL) - (b.codigo === LSEL));
   const geo = (c) => { const [a, b] = c.split("-").map(Number), g = RED.tramos[c];
                        return g || [[RED.estaciones[a].lat, RED.estaciones[a].lon], [RED.estaciones[b].lat, RED.estaciones[b].lon]]; };
@@ -1646,6 +1656,15 @@ document.addEventListener("click", (ev) => {
     })();
     return;
   }
+  const sc = ev.target.closest("#sel-cats [data-cat]");
+  if (sc) {
+    const cat = (RED.categorias || []).find((x) => x.id === sc.dataset.cat);
+    if (cat && cat.lineas.length) {
+      const prev = leer("linea." + cat.id, null);
+      cambiarLinea(cat.lineas.includes(prev) ? prev : cat.lineas[0]);
+    }
+    return;
+  }
   const sl = ev.target.closest("#sel-lineas [data-linea]");
   if (sl) { cambiarLinea(sl.dataset.linea); return; }
   const lp = ev.target.closest("[data-linea-prec]");
@@ -1879,6 +1898,14 @@ function prepararIphone() {
   $("modal-iphone").onclick = (e) => { if (e.target.id === "modal-iphone") $("modal-iphone").hidden = true; };
 }
 
+/* Al entrar: ¿tren o bus? */
+for (const b of document.querySelectorAll("#elegir [data-modo]")) b.onclick = () => {
+  const m = b.dataset.modo;
+  guardar("modo_auto", $("el-recordar").checked ? m : null);
+  if (m === "bus") { location.href = "/bus/"; return; }
+  $("elegir").hidden = true;
+  if (location.search) history.replaceState(null, "", location.pathname + location.hash);
+};
 (async function inicio() {
   const v = leer("ventana", 180);
   for (const x of document.querySelectorAll("#ventana button")) x.setAttribute("aria-pressed", +x.dataset.v === v);

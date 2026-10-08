@@ -83,9 +83,15 @@ class App:
                 print("Aviso: sin trenes regionales (%s)" % e)
         self.tipos_reg = (reg or {}).get("tipos", {})
         self.tipos_num = {tp[1]: tp for tp in self.tipos_reg.values()}
+        # los regionales que vienen en el horario de Cercanías (FEVE 718xx como C6/C7, el de León
+        # como C1) pasan a su apartado: Regionales (RE, RO, RL) o larga distancia (LD)
+        for tid in list(datos["viajes"]):
+            dig = "".join(c if c.isdigit() else " " for c in tid[5:]).split()
+            if dig and dig[0] in self.tipos_num:
+                datos["lineas"][tid] = clase_servicio(self.tipos_num[dig[0]][0], datos["viajes"][tid])
         redes = {}
         for nombre, conf in self.cfg["redes"].items():
-            dg = gtfs.separar_por_grupo(datos, set(conf["lineas"]))
+            dg = gtfs.separar_por_grupo(datos, set(conf["lineas"]) | set(conf.get("otras", [])))
             if not dg["viajes"]:
                 continue
             dg["regionales"] = sorted(self.tipos_num)
@@ -116,13 +122,10 @@ class App:
                 g["redes"].append(nombre)
                 g["cruce"] = g["cruce"] or k in red.apartaderos
                 r["glob"].append(glob[s])
-            lineas_cer = set(self.cfg["redes"][nombre]["lineas"])
             for v in red.viajes.values():
-                for k in v.k:
-                    if v.linea in lineas_cer:
+                for j, k in enumerate(v.k):
+                    if v.para[j]:
                         estaciones[r["glob"][k]]["lineas"].add(v.linea)
-                    elif v.pos.get(k) is not None and v.para[v.pos[k]]:
-                        estaciones[r["glob"][k]].setdefault("servicios", set()).add(v.linea)
         for e in estaciones:
             e["lineas"] = sorted(e["lineas"], key=_orden_linea)
             if "servicios" in e:
@@ -132,13 +135,14 @@ class App:
         extra = {}
         for nombre, r in redes.items():
             red = r["red"]
+            otras = set(self.cfg["redes"][nombre].get("otras", []))
             for lin, eje in red.ejes.items():
                 if lin not in self.cfg["redes"][nombre]["lineas"]:
-                    continue
+                    continue                    # en las vistas de Cercanías se ven también los regionales
                 pos = {k: i for i, k in enumerate(list(eje["nodos"]))}
                 otros = set(eje["otros"])
                 for v in red.viajes.values():
-                    if v.linea in self.cfg["redes"][nombre]["lineas"]:
+                    if v.linea not in otras:
                         continue
                     com = [k for j, k in enumerate(v.k) if v.para[j] and (k in pos or k in otros)]
                     if len(com) >= 2:
@@ -175,8 +179,10 @@ class App:
             for (a, b), geo in red.geo_tramo.items():
                 if a < b:
                     tramos["%d-%d" % (G[a], G[b])] = [[round(x, 5), round(y, 5)] for x, y in _simplificar(geo, 0.004)]
+            validas = set(self.cfg["redes"][nombre]["lineas"]) | set(self.cfg["redes"][nombre].get("otras", []))
+            cat_de = {c: cat for cat, _, ls in self.cfg.get("categorias", []) for c in ls}
             for lin, eje in red.ejes.items():
-                if lin not in self.cfg["redes"][nombre]["lineas"]:
+                if lin not in validas:
                     continue
                 nodos = eje["nodos"]
                 usados = []
@@ -191,7 +197,8 @@ class App:
                             usados.append("%d-%d" % c)
                 lineas[lin] = {
                     "codigo": lin, "red": nombre, "color": self.cfg.get("colores_lineas", {}).get(lin, "#888888"),
-                    "nombre": "%s – %s" % (_corto(red.nombre[nodos[0]]), _corto(red.nombre[nodos[-1]])),
+                    "nombre": self.cfg.get("nombres_lineas", {}).get(lin) or "%s – %s" % (_corto(red.nombre[nodos[0]]), _corto(red.nombre[nodos[-1]])),
+                    "categoria": cat_de.get(lin, "cercanias"),
                     "eje": [G[k] for k in nodos], "eje_km": [round(x, 3) for x in eje["km"]],
                     "otros": [G[k] for k in eje["otros"]], "tramos": usados,
                     "n_trenes": sum(1 for v in red.viajes.values() if v.linea == lin),
@@ -202,6 +209,8 @@ class App:
         return {"version": VERSION, "fecha": self.dia.isoformat(), "linea_defecto": self.cfg["linea"],
                 "lineas": dict(sorted(lineas.items(), key=lambda kv: _orden_linea(kv[0]))),
                 "estaciones": self.estaciones, "tramos": tramos, "url_movil": self.url_movil,
+                "categorias": [{"id": c, "nombre": n, "lineas": [x for x in ls if x in lineas]}
+                               for c, n, ls in self.cfg.get("categorias", [])],
                 "servicios": {"R": {"codigo": "R", "nombre": "Regional", "color": "#64748b"},
                               "LD": {"codigo": "LD", "nombre": "Larga distancia", "color": "#475569"}}}
 
@@ -220,6 +229,9 @@ class App:
             kmn[k] = min(eje["nodos"], key=lambda n: distancia_km(red.coord[n], red.coord[k]))
             kmn[k] = dict(zip(eje["nodos"], eje["km"]))[kmn[k]] + distancia_km(red.coord[kmn[k]], red.coord[k])
         ks = list(eje["nodos"]) + list(eje["otros"])
+        # solo las estaciones donde para algún tren de la línea (un AVE no para en Lugones)
+        paran = {k for v in red.viajes.values() if v.linea == codigo for j, k in enumerate(v.k) if v.para[j]}
+        ks = [k for k in ks if k in paran] or ks
         return {
             "linea": codigo, "version": VERSION, "fecha": self.dia.isoformat(),
             "estaciones": [{"k": r["glob"][k], "id": red.est[k], "nombre": red.nombre[k], "km": round(kmn.get(k, 0.0), 3),
@@ -872,8 +884,19 @@ def _anadir_regionales(dg, datos, reg, metrico):
         if tipo[1] in ya:
             continue
         dg["viajes"][tid] = filas
-        dg["lineas"][tid] = "R" if tipo[0] in gtfs.TIPOS_REGIONAL else "LD"
+        dg["lineas"][tid] = clase_servicio(tipo[0], filas)
         nums[tid] = tipo[1]
         for s_, _, _ in filas:
             if s_ not in dg["paradas"] and s_ in datos["paradas"]:
                 dg["paradas"][s_] = datos["paradas"][s_]
+
+
+def clase_servicio(tipo, filas):
+    """Apartado de un tren que no es de Cercanías: AVE/Alvia/Avlo (LD), regional FEVE hacia el este
+    (Infiesto, Llanes, Santander: RE), hacia el oeste (Grado, Pravia, Ferrol: RO) o de Renfe (León: RL)."""
+    if tipo not in gtfs.TIPOS_REGIONAL:
+        return "LD"
+    paradas = [f[0] for f in filas]
+    if any(p.startswith("05") for p in paradas):
+        return "RE" if any(p.startswith("055") or p.startswith("054") for p in paradas) else "RO"
+    return "RL"

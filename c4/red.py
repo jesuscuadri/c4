@@ -26,7 +26,7 @@ from .util import distancia_km, normaliza
 
 # Regionales y larga distancia: solo se tiene el trozo que va por la red de Cercanías, así que sus
 # «cabeceras» aquí no son de verdad (siguen hasta Llanes, Ferrol, León...): no dan la vuelta.
-SIN_ROTACION = ("R", "LD")
+SIN_ROTACION = ("R", "LD", "RE", "RO", "RL")
 
 
 class Viaje:
