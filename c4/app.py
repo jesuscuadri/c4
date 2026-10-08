@@ -20,7 +20,6 @@ from . import cta
 from .estimador import Estimador
 from .historial import (Precision, aprender_calibracion, correccion, aprender_paradas, aprender_salidas, aprender_sesgos, aprender_tiempos,
                         guardar_observaciones, guardar_resumen, resumen)
-from .linea import Linea
 from .red import Red
 from .tiemporeal import TiempoReal
 from .emtusa import Emtusa
@@ -958,7 +957,7 @@ def servir(app, abrir=True, en_red=False, publico=False):
             else:
                 fichero = os.path.normpath(os.path.join(WEB, ruta.lstrip("/")))
                 base = os.path.normpath(WEB)
-            if not fichero.startswith(base) or not os.path.isfile(fichero):
+            if not (fichero == base or fichero.startswith(base + os.sep)) or not os.path.isfile(fichero):
                 return self._enviar(b"No encontrado", "text/plain; charset=utf-8", 404)
             tipo = mimetypes.guess_type(fichero)[0] or "application/octet-stream"
             if tipo.startswith("text/") or tipo.endswith("javascript"):

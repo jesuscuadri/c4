@@ -1,12 +1,17 @@
-# C-4 en tiempo real · Gijón – Cudillero
+# Transporte público de Asturias en tiempo real
 
-La app de Adif calcula la llegada como **horario + retraso actual** y supone que ese retraso se mantiene igual todo el viaje. En la C-4 no es así, porque es **vía única**. Si el tren que viene de frente va tarde, el tuyo le espera en el apartadero (Veriña, Perlora, Candás…) y llegas más tarde de lo que dice la app. En otras ocasiones pasa lo contrario: el horario tiene márgenes y el tren recupera tiempo.
+App web (también se instala en el móvil) con **todo el transporte público de Asturias**:
 
-Este programa simula la línea entera con los datos en tiempo real de Renfe y te da una hora de llegada más realista. Además te explica **por qué** llega a esa hora.
+- **Trenes.** Cercanías de toda Asturias (C-1 a C-8 y las demás), regionales (FEVE, León) y larga distancia (AVE, Alvia, Avlo). La hora de llegada es la **real**: horario de Renfe + tiempo real (GTFS-Realtime) + simulación de los cruces en vía única. Hay planificador «puerta a puerta» con transbordos y bus urbano.
+- **Bus de Gijón (EMTUSA).** En directo, con la API pública de EMTUSA.
+- **Bus del Consorcio de Transportes de Asturias.** Urbanos de Oviedo (TUA), Avilés y Mieres (EMUTSA) e **interurbanos de toda Asturias** (ALSA y el resto de operadores). Con el horario oficial (GTFS): el Consorcio no publica dónde va cada autobús, así que sus posiciones son estimadas y la app lo dice. Los interurbanos tienen un buscador de viaje de A a B (hoy y mañana) que respeta dónde se puede subir y bajar en cada línea.
+- **Cerca de mí.** Desde el inicio: la estación más cercana con sus próximos trenes, las paradas de bus de Gijón y las del Consorcio.
+
+Empezó como «C-4 en tiempo real · Gijón – Cudillero». La app de Adif calcula la llegada como horario + retraso actual y supone que ese retraso se mantiene todo el viaje; en vía única no es así (el tren que viene de frente, si va tarde, hace esperar al tuyo en el apartadero). Este programa simula la línea con los datos en tiempo real y explica **por qué** llega a esa hora.
 
 ## Arrancar
 
-Necesitas Python 3.8 o superior. No hay que instalar nada más.
+Necesitas Python 3.8 o superior (Render usa el de `.python-version`). No hay que instalar nada más.
 
 | Qué quieres | Cómo |
 |---|---|
@@ -82,16 +87,24 @@ Usa la pestaña **Precisión** para decidir los ajustes. Si el sesgo sale positi
 ## Estructura
 
 ```
-c4_tiempo_real.py   programa principal
-c4/gtfs.py          descarga y lectura del horario oficial
-c4/linea.py         estaciones, apartaderos, cruces, rotaciones
+c4_tiempo_real.py   programa principal (y modo consulta por consola)
+servidor.py         arranque en Render
+c4/gtfs.py          descarga y lectura del horario de Renfe (Cercanías, regionales, larga distancia)
+c4/red.py           modelo de la red: estaciones, apartaderos, cruces, rotaciones
+c4/linea.py         alias de red.py (compatibilidad con las pruebas)
 c4/tiemporeal.py    lectura del tiempo real de Renfe
 c4/estimador.py     simulación de la vía única
 c4/historial.py     observaciones, aprendizaje y medida de precisión
+c4/planificador.py  «Ir a…»: rutas puerta a puerta con transbordos, bus urbano y andar
 c4/emtusa.py        autobús urbano de Gijón (EMTUSA) en tiempo real
-c4/app.py           servidor web local
-web/                interfaz (HTML, CSS, JS; el mapa usa Leaflet y OpenStreetMap)
-tests/              pruebas con el horario real del 23/09/2026 y posiciones reales de Renfe
+c4/cta.py           buses del Consorcio de Transportes de Asturias (GTFS): urbanos e interurbanos
+c4/persistencia.py  guarda lo aprendido y los horarios ya procesados en la rama «datos» de GitHub
+c4/app.py           servidor web y API
+web/                interfaz de trenes (HTML, CSS, JS; mapa con Leaflet)
+web-bus/            interfaz del bus de Gijón
+web-cta/            interfaz de los buses del Consorcio
+tests/              pruebas (horario real, posiciones reales, muestras del Consorcio)
+.github/workflows/  despierta el servidor de Render de madrugada
 ```
 
 ## Límites
@@ -103,17 +116,15 @@ tests/              pruebas con el horario real del 23/09/2026 y posiciones real
 
 ## En internet (Render)
 
-- **No se duerme en horario de trenes:** en Render el programa se visita a sí mismo cada 10 minutos entre las 5:00 y las 0:45, así que no hay que esperar a que arranque. De madrugada se deja dormir para no gastar horas del plan gratis. Si lo abres a las 5:30 puede tardar un minuto la primera vez.
-- **Abre al instante:** la app guarda una copia en el móvil. Si el servidor está arrancando o no hay cobertura, enseña los últimos datos con un aviso y se actualiza sola en cuanto puede.
+- **Para que no se duerma:** el plan gratis de Render duerme el servidor tras ~15 minutos sin visitas. Un monitor gratis (UptimeRobot, cada 5 minutos, a `/api/ping`) lo mantiene despierto. El propio programa también se visita a sí mismo en horario de trenes, y un trabajo de GitHub lo despierta de madrugada.
+- **Arranque rápido:** el disco de Render se vacía en cada reinicio o despliegue. Por eso, lo aprendido (`historial.json.gz`) y los horarios ya procesados (carpeta `horarios/`: trenes y buses) se guardan en la rama `datos` de este repositorio, que no provoca despliegues. Al arrancar se recuperan de ahí en vez de recalcularlos. Hace falta en Render `C4_GH_TOKEN` (token con «Contents: Read and write») y `C4_GH_REPO` (`usuario/repositorio`).
+- **Abre al instante:** la app guarda una copia en el móvil. Si el servidor está arrancando o no hay cobertura, enseña los últimos datos con un aviso y se actualiza sola.
 
 ## Publicar mejoras (Render + GitHub)
 
-La web en internet se actualiza sola cada vez que se suben cambios a GitHub:
-
 1. Los archivos cambiados aparecen en **GitHub Desktop**, en la carpeta `PycharmProjects\c4`.
-2. Abajo a la izquierda escribe un resumen (por ejemplo «Mejora del mapa») y pulsa **Commit to main**.
+2. Abajo a la izquierda escribe un resumen y pulsa **Commit to main**.
 3. Arriba pulsa **Push origin**.
-4. Render detecta el cambio y publica la versión nueva en 1–2 minutos. El icono del iPhone la muestra al abrirlo.
+4. Render publica la versión nueva en 1–2 minutos.
 
 En Render: *Start Command* `python servidor.py`, *Build Command* `python --version`, plan **Free**, región **Frankfurt**.
-En el plan gratis el servidor se reinicia a menudo, así que el historial de la pestaña Precisión allí no se conserva mucho tiempo.

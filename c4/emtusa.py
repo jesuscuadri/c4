@@ -205,9 +205,6 @@ class Emtusa:
                 contiene.append(p)
         return (exactas + contiene)[:limite]
 
-    def lineas_de(self, id_parada):
-        return self.paradas_d.get(int(id_parada), {}).get("lineas", [])
-
     # ================================================================= TIEMPO REAL (red)
     def _get(self, ruta, autenticado=True, timeout=12):
         req = urllib.request.Request(BASE + ruta)

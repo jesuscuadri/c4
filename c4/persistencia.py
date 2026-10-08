@@ -216,9 +216,6 @@ class Almacen:
             print("Aviso:", self.error)
             return False
 
-    def guardar_en_segundo_plano(self):
-        threading.Thread(target=self.guardar, daemon=True).start()
-
 
 # ---------------------------------------------------------------------- paquete <-> disco
 CABECERA_PRECISION = historial.CABECERA_PRECISION

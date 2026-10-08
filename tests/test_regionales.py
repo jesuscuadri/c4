@@ -3,7 +3,6 @@
 import io
 import os
 import sys
-import tempfile
 import unittest
 import zipfile
 from datetime import date

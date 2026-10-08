@@ -225,12 +225,6 @@ def _rutas_bus(bus, orig_ids, dest_ids, max_transbordos=1, limite=6):
     return itinerarios[:limite]
 
 
-def _andar_etapa(p_desde, p_hasta, nombre_desde, nombre_hasta):
-    m = distancia_km((p_desde["lat"], p_desde["lon"]), (p_hasta["lat"], p_hasta["lon"])) * 1000
-    return {"tipo": "andar", "desde": nombre_desde, "hasta": nombre_hasta,
-            "metros": round(m), "min": round(andar_min(m), 1)}
-
-
 def _acceso(bus, origen, est_pt, en_vivo):
     """Cómo ir del origen a la estación de tren: andar, o bus + andar. Devuelve
     (etapas, minutos_totales) o None si no encuentra forma en bus y está lejos."""
