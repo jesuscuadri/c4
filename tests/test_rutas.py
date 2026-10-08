@@ -182,6 +182,8 @@ class TestRutas(unittest.TestCase):
         p = g.buscar_concejo("Cabrales")
         self.assertIsNotNone(p)
         self.assertEqual(len(p["nodos"]), 3)
+        self.assertEqual(g.concejo_por_prefijo("cabral")["nombre"], "Cabrales")     # mientras se escribe
+        self.assertIsNone(g.concejo_por_prefijo("zzzz"))
         self.assertIsNone(g.buscar_concejo("Iglesia"))            # palabra común
         self.assertIsNone(g.buscar_concejo("Villabus"))           # ya es un pueblo, solo 2 paradas con ese nombre
 

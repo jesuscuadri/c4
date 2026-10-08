@@ -167,7 +167,7 @@ def sugerir(texto, linea, bus, limite=8, grafo=None):
         if x["tipo"] == "localidad":
             poner(x["nombre"], "localidad", x["lat"], x["lon"], x["texto"])
     if grafo is not None and not any(x["tipo"] == "localidad" for x in cta):
-        c = grafo.buscar_concejo(texto)
+        c = grafo.buscar_concejo(texto) or grafo.concejo_por_prefijo(texto)
         if c:
             poner(c["nombre"], "localidad", c["lat"], c["lon"], c["nombre"])
     if bus is not None and getattr(bus, "red_ok", False):

@@ -12,6 +12,7 @@ autobús interurbano (en muchas líneas, al salir de una ciudad no se puede baja
 Solo biblioteca estándar.
 """
 import math
+import re
 import threading
 
 from .bus.emtusa import andar_min
@@ -144,6 +145,33 @@ class Grafo:
         lat, lon = self._centro_de(ns)
         return {"lat": lat, "lon": lon, "nombre": texto.strip()[:1].upper() + texto.strip()[1:], "tipo": "localidad",
                 "nodos": list(ns)}
+
+    def concejo_por_prefijo(self, texto):
+        """Mientras se escribe («somied»): el concejo cuya palabra empieza así, con su ortografía."""
+        n = normaliza(texto)
+        if len(n) < 4 or " " in n:
+            return None
+        self.buscar_concejo("xxxx")                      # prepara los índices
+        if not hasattr(self, "_palabras"):
+            from collections import Counter
+            cuenta = Counter()
+            for i, nd in enumerate(self.nodos):
+                if nd[0] != "S":
+                    continue
+                for w in re.findall(r"[^\W\d_]+", (nd[2] or "") + " " + (nd[5] or "")):
+                    cuenta[w] += 1
+            self._palabras = {}
+            for w, c in cuenta.items():
+                k = normaliza(w)
+                if k not in self._palabras or c > self._palabras[k][1]:
+                    self._palabras[k] = (w, c)
+        cands = [(-c, k, w) for k, (w, c) in self._palabras.items() if k.startswith(n) and k not in PALABRAS_COMUNES and len(k) >= 4]
+        for _, k, w in sorted(cands):
+            p = self.buscar_concejo(k)
+            if p:
+                p["nombre"] = w
+                return p
+        return None
 
     def localidad_pequena_exacta(self, texto):
         """El pueblo con ese nombre exacto, si es pequeño y tiene estación (para que «Candás» sea todo Candás)."""
