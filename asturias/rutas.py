@@ -32,6 +32,13 @@ HORIZONTE = 8 * 60            # min: autobuses que salen como mucho tantas horas
 CELDA = 0.01                  # grados: rejilla para buscar vecinos (~1 km)
 
 
+PALABRAS_COMUNES = {"iglesia", "plaza", "colegio", "escuela", "ayuntamiento", "centro", "cementerio", "estacion", "hospital",
+                    "avenida", "calle", "carretera", "cruce", "barrio", "polideportivo", "instituto", "campo", "parque",
+                    "puente", "fabrica", "gasolinera", "mercado", "ermita", "capilla", "camping", "hotel", "campus",
+                    "universidad", "biblioteca", "piscina", "residencia", "centro", "junto", "cooperativa", "polígono",
+                    "poligono", "mina", "pozo", "casa", "bar", "tanatorio", "farmacia", "correos", "museo", "teatro"}
+
+
 def minutos_andando(metros):
     return andar_min(metros * DESVIO_ANDAR)
 
@@ -111,6 +118,32 @@ class Grafo:
 
     def tiene_estacion(self, loc):
         return bool(self.estaciones_de.get(loc))
+
+    def buscar_concejo(self, texto):
+        """Un nombre que sale en varias paradas del Consorcio sin ser un pueblo («Somiedo», «Cabrales»):
+        todas esas paradas juntas, si están en una zona razonable. Evita que se confunda con una calle de Gijón."""
+        n = normaliza(texto)
+        if len(n) < 4 or " " in n or n in PALABRAS_COMUNES:
+            return None
+        if not hasattr(self, "_nn"):
+            self._nn = [(i, " " + normaliza(nd[2] + " " + (nd[5] or "")) + " ") for i, nd in enumerate(self.nodos) if nd[0] == "S"]
+            self._concejos = {}
+        if n not in self._concejos:
+            clave = " " + n + " "
+            ns = [i for i, k in self._nn if clave in k.replace("-", " ").replace("(", " ").replace(")", " ").replace(",", " ")]
+            grupo = None
+            if len(ns) >= 3:
+                c = self._centro_de(ns)
+                d = sorted(distancia_km(c, (self.nodos[i][3], self.nodos[i][4])) for i in ns)
+                if d[int(0.8 * (len(d) - 1))] <= 15.0:
+                    grupo = ns
+            self._concejos[n] = grupo
+        ns = self._concejos[n]
+        if not ns:
+            return None
+        lat, lon = self._centro_de(ns)
+        return {"lat": lat, "lon": lon, "nombre": texto.strip()[:1].upper() + texto.strip()[1:], "tipo": "localidad",
+                "nodos": list(ns)}
 
     def localidad_pequena_exacta(self, texto):
         """El pueblo con ese nombre exacto, si es pequeño y tiene estación (para que «Candás» sea todo Candás)."""
@@ -476,6 +509,18 @@ def _etapa_bus(g, x, espera):
             "paradas": x["j"] - x["i"], "espera": round(max(0.0, espera), 1), "horario": True}
 
 
+def _unir_paseos(etapas):
+    """Dos paseos seguidos son uno solo."""
+    out = []
+    for e in etapas:
+        if out and e["tipo"] == "andar" and out[-1]["tipo"] == "andar":
+            a = out[-1]
+            out[-1] = dict(a, hasta=e["hasta"], metros=a["metros"] + e["metros"], min=round(a["min"] + e["min"], 1))
+        else:
+            out.append(e)
+    return out
+
+
 def _montar(g, plan, v, acc, sal, ahora, est):
     n0, nf = v["nodo_inicial"], v["nodo_final"]
     et_acc, t_acc = acc[n0]
@@ -510,6 +555,7 @@ def _montar(g, plan, v, acc, sal, ahora, est):
             etapas.append(_etapa_bus(g, x, espera))
         previo, ant = _llega(g, x), x
     etapas += et_sal
+    etapas = _unir_paseos(etapas)
     llega = _llega(g, veh[-1])
     sube_n, baja_n = g.nodos[veh[0]["de"]], g.nodos[veh[-1]["a"]]
     plan.update({

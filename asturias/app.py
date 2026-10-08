@@ -682,6 +682,10 @@ class App:
             if g is not None and nombre in g.localidades and (g.pueblo_pequeno(nombre) or not g.tiene_estacion(nombre)):
                 # un pueblo elegido de las sugerencias (una ciudad con estación del mismo nombre se queda en la estación)
                 return g.punto_localidad(nombre)
+            if g is not None and nombre:
+                c = g.buscar_concejo(nombre)       # «Somiedo», «Cabrales»: un conjunto de paradas
+                if c:
+                    return c
             try:
                 return {"lat": float(lat), "lon": float(lon), "nombre": nombre or "Tu ubicación", "tipo": "gps"}
             except ValueError:

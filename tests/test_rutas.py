@@ -172,6 +172,27 @@ class TestRutas(unittest.TestCase):
         self.assertIsNone(g.localidad_pequena_exacta("Villabus"))    # sin estación con ese nombre
         self.assertIsNone(g.localidad_pequena_exacta("Estación B"))
 
+    def test_concejo_por_nombre_de_paradas(self):
+        d = red_bus()
+        d["paradas"].update({"C1": ["Carreña de Cabrales", "Carreña", 43.30, -4.80],
+                             "C2": ["Arenas de Cabrales", "Arenas, Las", 43.29, -4.82],
+                             "C3": ["Canales de Cabrales", "Canales", 43.31, -4.81],
+                             "C4": ["Iglesia", "Canales", 43.31, -4.81]})
+        g = rutas.Grafo(EST, {"interurbano": d})
+        p = g.buscar_concejo("Cabrales")
+        self.assertIsNotNone(p)
+        self.assertEqual(len(p["nodos"]), 3)
+        self.assertIsNone(g.buscar_concejo("Iglesia"))            # palabra común
+        self.assertIsNone(g.buscar_concejo("Villabus"))           # ya es un pueblo, solo 2 paradas con ese nombre
+
+    def test_dos_paseos_seguidos_se_unen(self):
+        et = [{"tipo": "andar", "desde": "A", "hasta": "B", "metros": 100, "min": 1.5},
+              {"tipo": "andar", "desde": "B", "hasta": "C", "metros": 200, "min": 3.0},
+              {"tipo": "tren"}]
+        u = rutas._unir_paseos(et)
+        self.assertEqual(len(u), 2)
+        self.assertEqual((u[0]["desde"], u[0]["hasta"], u[0]["metros"], u[0]["min"]), ("A", "C", 300, 4.5))
+
     def test_cambio_andando(self):
         # S3 y la estación A están a unos 150 m: se puede cambiar andando
         i3, ia = self.g.idx[("S", "S3")], self.g.idx[("T", 0)]

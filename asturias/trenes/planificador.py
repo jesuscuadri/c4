@@ -100,6 +100,12 @@ def geocodificar(texto, linea, bus, con_internet=True, grafo=None):
         if p:
             return p
 
+    # 3b) un concejo o comarca que sale en varias paradas del Consorcio («Cabrales», «Somiedo»)
+    if grafo is not None:
+        p = grafo.buscar_concejo(texto)
+        if p:
+            return p
+
     # 4) parada de autobús por nombre: Gijón y, si no, del Consorcio
     if bus is not None and bus.red_ok:
         ps = bus.buscar_paradas(texto, limite=1)
@@ -160,6 +166,10 @@ def sugerir(texto, linea, bus, limite=8, grafo=None):
     for x in cta:
         if x["tipo"] == "localidad":
             poner(x["nombre"], "localidad", x["lat"], x["lon"], x["texto"])
+    if grafo is not None and not any(x["tipo"] == "localidad" for x in cta):
+        c = grafo.buscar_concejo(texto)
+        if c:
+            poner(c["nombre"], "localidad", c["lat"], c["lon"], c["nombre"])
     if bus is not None and getattr(bus, "red_ok", False):
         for p in bus.buscar_paradas(texto, limite=30):
             pn = " " + normaliza(p["nombre"]).replace("(", " ")
