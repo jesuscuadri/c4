@@ -1737,6 +1737,8 @@ async function planificar(silencioso) {
   }
   try {
     const p = await pedir(url, 16000);
+    p._q = (po + pd).slice(1);
+    if (p.manana && p.manana.plan) p.manana.plan._q = p._q;
     PLAN_ULTIMO = modo === "ahora" ? { url, ts: Date.now() } : null;     // solo lo «de ahora» se recalcula solo
     pintarPlan(p);
     if (p.preparando) setTimeout(() => { if (tabActual === "ir" && !PLAN_ULTIMO) planificar(true); }, 20000);
@@ -1935,9 +1937,10 @@ function minutosHastaSalida(p, v) {
 function avisameHtml(p) {
   const v = primerVehiculo(p);
   if (!v || minutosHastaSalida(p, v) == null) return "";
-  const m = leer("push.margen", 10);
+  const m = leer("push.margen", 10), r = leer("push.repetir", "no");
   return `<div class="ir-avisame"><button type="button" class="btn-mini avisame-b">🔔 Avísame</button>
     <select class="avisame-m" aria-label="Margen del aviso">${[5, 10, 15, 30].map((x) => `<option value="${x}"${x === m ? " selected" : ""}>${x} min de margen</option>`).join("")}</select>
+    ${p._q && p.sale_hm ? `<select class="avisame-r" aria-label="Repetir"><option value="no"${r === "no" ? " selected" : ""}>Solo esta vez</option><option value="lv"${r === "lv" ? " selected" : ""}>🔁 Lunes a viernes</option><option value="todos"${r === "todos" ? " selected" : ""}>🔁 Todos los días</option></select>` : ""}
     <span class="avisame-e"></span></div>`;
 }
 const b64uBytes = (s) => { const b = atob((s + "=".repeat((4 - (s.length % 4)) % 4)).replace(/-/g, "+").replace(/_/g, "/")); return Uint8Array.from(b, (c) => c.charCodeAt(0)); };
@@ -1961,22 +1964,24 @@ async function suscripcion() {
   }
   return { sub: sub.toJSON(), nueva };
 }
+const DIAS_REP = { lv: [0, 1, 2, 3, 4], todos: [0, 1, 2, 3, 4, 5, 6] };
 function ligarAvisame(box, p) {
   const fila = box.querySelector(".ir-avisame");
   if (!fila) return;
   const v = primerVehiculo(p), d0 = minutosHastaSalida(p, v);
   const clave = `${p.es_manana ? "m" : "h"}|${v.linea}|${v.hm || Math.round(d0)}|${v.desde}`;
-  const btn = fila.querySelector(".avisame-b"), sel = fila.querySelector(".avisame-m"), msg = fila.querySelector(".avisame-e");
+  const btn = fila.querySelector(".avisame-b"), sel = fila.querySelector(".avisame-m"), rep = fila.querySelector(".avisame-r"), msg = fila.querySelector(".avisame-e");
   const pintar = () => {
     const a = leer("push.avisos", {})[clave];
     const vigente = a && a.cuando > Date.now() - 60000;
     btn.textContent = vigente ? "🔕 Quitar aviso" : "🔔 Avísame";
     btn.classList.toggle("on", !!vigente);
-    sel.hidden = !!vigente;
+    sel.hidden = !!vigente; if (rep) rep.hidden = !!vigente;
     msg.textContent = vigente ? `Te aviso a las ${new Date(a.cuando).toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })}` : "";
   };
   pintar();
   sel.onchange = () => guardar("push.margen", +sel.value);
+  if (rep) rep.onchange = () => guardar("push.repetir", rep.value);
   btn.onclick = async () => {
     const todos = leer("push.avisos", {});
     btn.disabled = true;
@@ -1990,21 +1995,51 @@ function ligarAvisame(box, p) {
       const { sub, nueva } = await suscripcion();
       const falta = minutosHastaSalida(p, v);
       const en = Math.max(0, falta - v.andar - margen);
-      const andar = Math.round(v.andar);
-      const titulo = `🚌 Tu ${v.linea} sale en ${Math.max(1, Math.round(v.andar + margen))} min (${v.hm || hm(Math.floor((new Date().getHours() * 60 + new Date().getMinutes()) + falta))})`;
-      const texto = andar >= 1 ? `Sal ya: son ${andar} min andando hasta ${v.desde}.` : `Estate ya en ${v.desde}.`;
-      const r = await postJson("/api/push/avisar", { sub, en_min: en, titulo, texto, id: clave });
+      const r = await postJson("/api/push/avisar", {
+        sub, id: clave, en: falta, andar: v.andar, margen, retraso: (v.e.retraso || 0), linea: v.linea, desde: v.desde,
+        tipo: v.e.tipo === "tren" ? "tren" : "bus", trip: v.e.id || null, llega: p.llega, q: p._q || null });
       if (!r.ok) throw new Error(r.error || "No pude programar el aviso.");
       todos[clave] = { cuando: r.cuando * 1000 }; guardar("push.avisos", todos);
+      let extra = "";
+      if (rep && rep.value !== "no" && p._q && p.sale_hm) {
+        const etq = `${corto($("ir-o").value.trim() || MI_UBIC)} → ${corto($("ir-d").value.trim())}`;
+        const fid = `fijo|${p._q}|${p.sale_hm}`;
+        const f = await postJson("/api/push/repetir", { sub, id: fid, q: p._q, hora: p.sale_hm, dias: DIAS_REP[rep.value], margen, etiqueta: etq });
+        if (!f.ok) throw new Error(f.error || "No pude guardar el aviso fijo.");
+        const fijos = leer("push.fijos", {});
+        fijos[fid] = { etiqueta: etq, hora: p.sale_hm, dias: DIAS_REP[rep.value] };
+        guardar("push.fijos", fijos); pintarFijos();
+        extra = rep.value === "lv" ? " Y cada día de lunes a viernes." : " Y todos los días.";
+      }
       pintar();
       if (nueva) {
         const t = await postJson("/api/push/probar", { sub });
-        aviso(t.ok ? "Listo. Te acabo de mandar una notificación de prueba." : "Aviso guardado, pero la prueba falló (" + (t.codigo || "sin red") + ").");
-      } else aviso(en < 1 ? "Ya toca salir: te aviso ahora mismo." : "Hecho. Te aviso en " + Math.round(en) + " min.");
+        aviso(t.ok ? "Listo. Te acabo de mandar una notificación de prueba." + extra : "Aviso guardado, pero la prueba falló (" + (t.codigo || "sin red") + ").");
+      } else aviso((en < 1 ? "Ya toca salir: te aviso ahora mismo." : "Hecho. Te aviso en " + Math.round(en) + " min.") + extra);
     } catch (e) { aviso(e.message || "No pude activar el aviso."); }
     finally { btn.disabled = false; }
   };
 }
+
+/* avisos fijos (se repiten cada día): lista con ✕ para quitarlos */
+const NOMBRE_DIAS = (d) => d.length === 7 ? "todos los días" : d.length === 5 && d[4] === 4 ? "L–V" : d.map((x) => "LMXJVSD"[x]).join("");
+function pintarFijos() {
+  const cont = $("ir-fijos");
+  if (!cont) return;
+  const f = leer("push.fijos", {}), ids = Object.keys(f);
+  cont.hidden = !ids.length;
+  cont.innerHTML = ids.length ? `<span class="ir-ej-t">🔁 Avisos fijos</span>` + ids.map((id, i) =>
+    `<span class="fav-w"><span class="fav-t fijo-t">${esc(f[id].etiqueta)} · ${esc(NOMBRE_DIAS(f[id].dias))} ${esc(f[id].hora)}</span><button type="button" class="fav-x" data-i="${i}" aria-label="Quitar">×</button></span>`).join("") : "";
+  for (const b of cont.querySelectorAll(".fav-x")) b.onclick = async () => {
+    const id = ids[+b.dataset.i];
+    try {
+      const reg = await navigator.serviceWorker.ready, sub = await reg.pushManager.getSubscription();
+      if (sub) await postJson("/api/push/cancelar", { id, endpoint: sub.endpoint });
+      const g = leer("push.fijos", {}); delete g[id]; guardar("push.fijos", g); pintarFijos();
+    } catch (e) { aviso("No pude quitarlo ahora. Prueba otra vez."); }
+  };
+}
+pintarFijos();
 
 $("ir-buscar").onclick = () => planificar();
 

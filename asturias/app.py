@@ -58,7 +58,8 @@ class App:
         self.salidas = {}
         self.paradas = {}
         self.almacen = Almacen()               # guarda lo aprendido fuera del servidor (GitHub)
-        self.push = push.Avisos(self.almacen)  # avisos al móvil («tu bus sale en N minutos»)
+        self.push = push.Avisos(self.almacen, plan_fn=self.plan_para_aviso, cancelado_fn=self._tren_cancelado,
+                                alertas_fn=self._alertas_renfe)   # avisos al móvil («tu bus sale en N minutos»)
         self.ultimo_aprendizaje = 0
         self.errores_seguidos = 0
         self.url_movil = None
@@ -852,6 +853,28 @@ class App:
             traceback.print_exc()
             return {"ok": False, "error": "No pude calcular la ruta (%s)." % e}
 
+    # ---- apoyo de los avisos al móvil (siguen el tiempo real de cada viaje)
+    def plan_para_aviso(self, q, hora=None):
+        """Plan de un viaje guardado (la consulta de /api/ir). Con `hora` (min del día), saliendo a partir de ella."""
+        qs = parse_qs(q)
+        g = lambda k: qs.get(k, [""])[0]  # noqa: E731
+        origen = self.resolver(g("origen"), g("olat"), g("olon"), g("oname"))
+        destino = self.resolver(g("destino"), g("dlat"), g("dlon"), g("dname"))
+        if not origen or not destino:
+            return {"ok": False, "error": "No encontré el origen o el destino."}
+        if hora is not None:
+            return self.ir(origen, destino, hora=float(hora), dia="hoy", modo="salir")
+        return self.ir(origen, destino)
+
+    def _tren_cancelado(self, tid):
+        with self.lock:
+            res = self.res
+        return bool(res) and any(t.get("id") == tid and t.get("cancelado") for t in res.get("trenes", []))
+
+    def _alertas_renfe(self):
+        rt = getattr(self, "rt", None)
+        return [a["texto"] for a in (getattr(rt, "avisos_detalle", None) or [])]
+
     def bucle(self):
         # el horario de los buses del Consorcio, preparado de antemano (tarda unos segundos)
         for red in consorcio.REDES:
@@ -1007,8 +1030,9 @@ def servir(app, abrir=True, en_red=False, publico=False):
             except (ValueError, UnicodeDecodeError):
                 return self._json({"ok": False, "error": "Petición no válida."})
             if ruta == "/api/push/avisar":
-                return self._json(app.push.programar(cuerpo.get("sub"), cuerpo.get("en_min"), cuerpo.get("titulo") or "🚌 Es hora de salir",
-                                                     cuerpo.get("texto") or "", cuerpo.get("id")))
+                return self._json(app.push.programar(cuerpo.get("sub"), cuerpo, cuerpo.get("id")))
+            if ruta == "/api/push/repetir":
+                return self._json(app.push.programar_fijo(cuerpo.get("sub"), cuerpo, cuerpo.get("id")))
             if ruta == "/api/push/cancelar":
                 return self._json(app.push.cancelar(str(cuerpo.get("id") or ""), str(cuerpo.get("endpoint") or "")))
             if ruta == "/api/push/probar":
@@ -1017,7 +1041,7 @@ def servir(app, abrir=True, en_red=False, publico=False):
                     return self._json({"ok": False, "error": "Suscripción no válida."})
                 return self._json(app.push.probar(sub))
             if ruta == "/api/push/pendientes":
-                return self._json({"avisos": app.push.pendientes(str(cuerpo.get("endpoint") or ""))})
+                return self._json(app.push.pendientes(str(cuerpo.get("endpoint") or "")))
             return self._json({"ok": False, "error": "No conozco esa petición."})
 
         def do_GET(self):

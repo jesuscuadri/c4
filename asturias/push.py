@@ -11,10 +11,12 @@ La clave VAPID del servidor sale del token de GitHub (que ya es secreto y siempr
 que guardar ni pegar nada más: si no hay token (uso local), se crea una clave nueva en cada arranque.
 """
 import base64
+import datetime as _dt
 import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
 import threading
 import time
@@ -243,21 +245,119 @@ def enviar(clave, contacto, sub, datos, ttl=600):
 ARCHIVO = "push.json"
 MAX_AVISOS = 300
 MAX_POR_DISPOSITIVO = 12
+MAX_FIJOS = 8
 MAX_ESPERA_S = 48 * 3600        # no se programa nada a más de dos días
 TOLERANCIA_S = 20 * 60          # si el aviso llega a destiempo (servidor dormido) más de esto, ya no sirve
+VIGILA_ANTES_S = 25 * 60        # se empieza a mirar el tiempo real 25 min antes de avisar
+VENTANA_FIJO_ANTES = 90         # un aviso fijo se prepara hasta 90 min antes de la hora de salir
+
+
+def _min_dia(ts):
+    d = _dt.datetime.fromtimestamp(ts)
+    return d.hour * 60 + d.minute + d.second / 60.0
+
+
+def _hm_ts(ts):
+    return _dt.datetime.fromtimestamp(ts).strftime("%H:%M")
+
+
+def _hm_min(m):
+    m = int(m + 1e-6) % 1440
+    return "%02d:%02d" % (m // 60, m % 60)
+
+
+def _dep_abs(sale, ahora_ts):
+    """Instante (epoch) de una salida dada en minutos del día."""
+    dif = sale - _min_dia(ahora_ts)
+    if dif < -720:
+        dif += 1440
+    return ahora_ts + dif * 60
+
+
+def primer_vehiculo(plan, ahora_m):
+    """El primer tren/autobús de un plan: lo que hay que coger y cuánto se anda antes."""
+    if not plan or not plan.get("ok"):
+        return None
+    andar = 0.0
+    for e in plan.get("etapas") or []:
+        t = e.get("tipo")
+        if t == "andar":
+            andar += e.get("min") or 0
+            continue
+        if t == "tren":
+            sale, ret, desde, linea, ident = e.get("sale"), e.get("retraso") or 0, e.get("desde"), e.get("linea") or "C4", e.get("id")
+        elif t == "autobus":
+            sale, ret, desde, linea, ident = e.get("sale"), 0, e.get("subir"), e.get("linea"), None
+        elif t == "bus":
+            sale = ahora_m + e["sale_en"] if e.get("sale_en") is not None else None
+            ret, desde, linea, ident = 0, e.get("subir"), e.get("linea"), None
+        else:
+            return None
+        if sale is None:
+            return None
+        return {"tipo": "tren" if t == "tren" else "bus", "linea": str(linea or ""), "desde": str(desde or ""), "id": ident,
+                "sale": float(sale), "retraso": float(ret), "prog": float(sale) - float(ret), "andar": andar,
+                "llega": plan.get("llega")}
+    return None
+
+
+def _alternativas(plan):
+    out = []
+    for a in plan.get("alternativas") or []:
+        vs = a.get("vehiculos") or []
+        if not vs or a.get("sale") is None:
+            continue
+        ret = a.get("retraso") or 0
+        out.append({"tipo": vs[0].get("tipo", "tren"), "linea": str(vs[0].get("linea") or ""), "desde": str(a.get("desde") or ""),
+                    "id": None, "sale": float(a["sale"]), "retraso": float(ret), "prog": float(a["sale"]) - float(ret),
+                    "andar": 0.0, "llega": a.get("llega")})
+    return out
+
+
+def _norm(t):
+    return re.sub(r"\W+", "", (t or "").lower())
+
+
+def _coincide(ref, v):
+    if ref.get("id") and v.get("id"):
+        return ref["id"] == v["id"]
+    return _norm(ref.get("linea")) == _norm(v.get("linea")) and _norm(ref.get("desde")) == _norm(v.get("desde")) \
+        and abs(ref.get("prog", 0) - v["prog"]) <= 2.5
+
+
+def _icono(a):
+    return "🚆" if (a.get("ref") or {}).get("tipo") == "tren" else "🚌"
+
+
+def mensaje_salida(a, ahora):
+    ref = a["ref"]
+    n = max(1, int(round((a["dep"] - ahora) / 60.0)))
+    ret = int(round(a.get("retraso") or 0))
+    tit = "%s Tu %s sale en %d min (%s)%s" % (_icono(a), ref["linea"], n, _hm_ts(a["dep"]), " · +%d min de retraso" % ret if ret >= 2 else "")
+    andar = int(round(a.get("andar") or 0))
+    txt = ("Sal ya: son %d min andando hasta %s." % (andar, ref["desde"])) if andar >= 1 else "Estate ya en %s." % ref["desde"]
+    return tit, txt
 
 
 class Avisos:
-    def __init__(self, almacen=None, reloj=time.time, enviar_fn=enviar):
+    """Avisos pendientes («sal ya, tu bus sale en N min») y avisos fijos que se repiten cada día.
+
+    Cada aviso sigue el tiempo real: si el tren se retrasa mueve la hora, si lo cancelan o deja de ser
+    la mejor opción avisa del cambio, y si Renfe publica una incidencia en la línea, también."""
+
+    def __init__(self, almacen=None, reloj=time.time, enviar_fn=enviar, plan_fn=None, cancelado_fn=None, alertas_fn=None):
         token = getattr(almacen, "token", "") if almacen is not None else ""
         self.clave = Clave(token or None)
         self.contacto = os.environ.get("C4_URL", "https://c4-1-lgfj.onrender.com").strip() or "https://c4-1-lgfj.onrender.com"
         self.almacen = almacen
         self.reloj = reloj
         self._enviar = enviar_fn
+        self._plan_fn, self._cancelado_fn, self._alertas_fn = plan_fn, cancelado_fn, alertas_fn
         self.lock = threading.Lock()
         self.avisos = []
+        self.fijos = []
         self._sucio = False
+        self._ult_guardado = 0.0
 
     # -- persistencia (en la rama «datos» de GitHub, como el resto)
     def cargar(self):
@@ -267,67 +367,124 @@ class Avisos:
         if not crudo:
             return
         try:
-            lista = json.loads(crudo.decode("utf-8")).get("avisos", [])
+            datos = json.loads(crudo.decode("utf-8"))
         except Exception:  # noqa: BLE001
             return
         with self.lock:
             ids = {a["id"] for a in self.avisos}
-            self.avisos += [a for a in lista if a.get("id") not in ids]
-        print("Avisos al móvil recuperados: %d" % len(lista))
+            self.avisos += [a for a in datos.get("avisos", []) if a.get("id") not in ids]
+            ids = {f["id"] for f in self.fijos}
+            self.fijos += [f for f in datos.get("fijos", []) if f.get("id") not in ids]
+            for a in self.avisos:
+                a["vig"] = False
+        print("Avisos al móvil recuperados: %d (+%d fijos)" % (len(datos.get("avisos", [])), len(datos.get("fijos", []))))
 
-    def guardar_si_hace_falta(self):
+    def guardar_si_hace_falta(self, forzar=False):
+        ahora = self.reloj()
         with self.lock:
-            if not self._sucio:
+            if not self._sucio or (not forzar and ahora - self._ult_guardado < 120):
                 return
             self._sucio = False
-            copia = json.dumps({"avisos": self.avisos}, ensure_ascii=False).encode("utf-8")
+            self._ult_guardado = ahora
+            copia = json.dumps({"avisos": [{k: v for k, v in a.items() if k not in ("vig", "proximo")} for a in self.avisos],
+                                "fijos": self.fijos}, ensure_ascii=False).encode("utf-8")
         if self.almacen and self.almacen.activo:
             threading.Thread(target=self.almacen.subir_archivo, args=(ARCHIVO, copia), daemon=True).start()
 
     # -- API
-    def programar(self, sub, en_min, titulo, texto, ident=None):
-        if not isinstance(sub, dict) or not str(sub.get("endpoint", "")).startswith("https://") \
-                or not (sub.get("keys") or {}).get("p256dh") or not (sub.get("keys") or {}).get("auth"):
+    @staticmethod
+    def ident(endpoint, propio=None):
+        """Identificador: el que da el móvil, atado a su suscripción (nadie puede borrar los de otro)."""
+        if not propio:
+            return secrets.token_hex(7)
+        return hashlib.sha1((endpoint + "|" + str(propio)[:200]).encode("utf-8")).hexdigest()[:14]
+
+    @staticmethod
+    def _sub_valida(sub):
+        return isinstance(sub, dict) and str(sub.get("endpoint", "")).startswith("https://") \
+            and (sub.get("keys") or {}).get("p256dh") and (sub.get("keys") or {}).get("auth")
+
+    @staticmethod
+    def _num(d, k, lo, hi, defecto=0.0):
+        try:
+            v = float(d.get(k, defecto))
+        except (TypeError, ValueError):
+            raise ValueError("Dato «%s» no válido." % k)
+        if not lo <= v <= hi:
+            raise ValueError("Dato «%s» fuera de rango." % k)
+        return v
+
+    def programar(self, sub, d, ident=None, fijo=None):
+        """d: en (min hasta que sale el vehículo), andar, margen, retraso, linea, desde, tipo, trip, llega, q."""
+        if not self._sub_valida(sub):
             return {"ok": False, "error": "Suscripción no válida."}
         try:
-            en_s = float(en_min) * 60
-        except (TypeError, ValueError):
-            return {"ok": False, "error": "Hora no válida."}
-        if en_s > MAX_ESPERA_S:
-            return {"ok": False, "error": "Solo puedo avisarte con menos de dos días de antelación."}
-        cuando = self.reloj() + max(0.0, en_s)
+            falta = self._num(d, "en", -5, MAX_ESPERA_S / 60.0)
+            andar = self._num(d, "andar", 0, 180)
+            margen = self._num(d, "margen", 0, 120, 10)
+            retraso = self._num(d, "retraso", -30, 600)
+        except ValueError as e:
+            return {"ok": False, "error": str(e)}
+        linea, desde = str(d.get("linea") or "")[:20], str(d.get("desde") or "")[:80]
+        if not linea or not desde:
+            return {"ok": False, "error": "Falta qué vehículo coger."}
+        ahora = self.reloj()
+        dep = ahora + max(-5.0, falta) * 60
+        ref = {"tipo": "tren" if d.get("tipo") == "tren" else "bus", "linea": linea, "desde": desde,
+               "id": str(d["trip"])[:60] if d.get("trip") else None, "prog": _min_dia(dep - retraso * 60),
+               "llega": float(d["llega"]) if isinstance(d.get("llega"), (int, float)) else None}
+        q = str(d.get("q") or "")[:600] or None
         ident = self.ident(sub["endpoint"], ident)
         with self.lock:
             self.avisos = [a for a in self.avisos if a["id"] != ident]
             propios = [a for a in self.avisos if a["sub"]["endpoint"] == sub["endpoint"]]
             if len(propios) >= MAX_POR_DISPOSITIVO:
-                masviejo = min(propios, key=lambda a: a["cuando"])
-                self.avisos.remove(masviejo)
+                self.avisos.remove(min(propios, key=lambda a: a["cuando"]))
             if len(self.avisos) >= MAX_AVISOS:
                 return {"ok": False, "error": "Hay demasiados avisos pendientes. Prueba más tarde."}
-            self.avisos.append({"id": ident, "sub": {"endpoint": sub["endpoint"], "keys": {
-                "p256dh": sub["keys"]["p256dh"], "auth": sub["keys"]["auth"]}},
-                "cuando": cuando, "titulo": str(titulo)[:80], "texto": str(texto)[:200], "intentos": 0})
+            a = {"id": ident, "sub": {"endpoint": sub["endpoint"], "keys": {"p256dh": sub["keys"]["p256dh"], "auth": sub["keys"]["auth"]}},
+                 "dep": dep, "cuando": max(ahora, dep - (andar + margen) * 60), "andar": andar, "margen": margen,
+                 "retraso": retraso, "ref": ref, "q": q, "enviado": False, "cambios": 0, "perdido": 0, "vistos": [],
+                 "fijo": fijo}
+            self.avisos.append(a)
             self._sucio = True
-        self.guardar_si_hace_falta()
-        return {"ok": True, "id": ident, "cuando": cuando}
+        self.guardar_si_hace_falta(True)
+        return {"ok": True, "id": ident, "cuando": a["cuando"], "ahora": ahora}
 
-    @staticmethod
-    def ident(endpoint, propio=None):
-        """Identificador del aviso: el que da el móvil, atado a su suscripción (nadie puede borrar los de otro)."""
-        if not propio:
-            return secrets.token_hex(7)
-        return hashlib.sha1((endpoint + "|" + str(propio)[:80]).encode("utf-8")).hexdigest()[:14]
+    def programar_fijo(self, sub, d, ident=None):
+        if not self._sub_valida(sub):
+            return {"ok": False, "error": "Suscripción no válida."}
+        m = re.match(r"^(\d{1,2}):(\d{2})$", str(d.get("hora") or ""))
+        dias = sorted({int(x) for x in (d.get("dias") or []) if isinstance(x, int) and 0 <= x <= 6})
+        q = str(d.get("q") or "")[:600]
+        if not m or int(m.group(1)) > 23 or int(m.group(2)) > 59 or not dias or not q:
+            return {"ok": False, "error": "Aviso fijo no válido."}
+        try:
+            margen = self._num(d, "margen", 0, 120, 10)
+        except ValueError as e:
+            return {"ok": False, "error": str(e)}
+        ident = self.ident(sub["endpoint"], ident)
+        with self.lock:
+            self.fijos = [f for f in self.fijos if f["id"] != ident]
+            if len([f for f in self.fijos if f["sub"]["endpoint"] == sub["endpoint"]]) >= MAX_FIJOS:
+                return {"ok": False, "error": "Ya tienes %d avisos fijos. Quita alguno." % MAX_FIJOS}
+            self.fijos.append({"id": ident, "sub": {"endpoint": sub["endpoint"], "keys": {"p256dh": sub["keys"]["p256dh"], "auth": sub["keys"]["auth"]}},
+                               "q": q, "hora": "%02d:%02d" % (int(m.group(1)), int(m.group(2))), "dias": dias, "margen": margen,
+                               "etiqueta": str(d.get("etiqueta") or "")[:80], "ultimo": None, "prox": 0.0})
+            self._sucio = True
+        self.guardar_si_hace_falta(True)
+        return {"ok": True, "id": ident}
 
     def cancelar(self, ident, endpoint=None):
         if endpoint:
             ident = self.ident(endpoint, ident)
         with self.lock:
-            n = len(self.avisos)
-            self.avisos = [a for a in self.avisos if a["id"] != ident]
-            if len(self.avisos) != n:
+            n = (len(self.avisos), len(self.fijos))
+            self.avisos = [a for a in self.avisos if a["id"] != ident and a.get("fijo") != ident]
+            self.fijos = [f for f in self.fijos if f["id"] != ident]
+            if n != (len(self.avisos), len(self.fijos)):
                 self._sucio = True
-        self.guardar_si_hace_falta()
+        self.guardar_si_hace_falta(True)
         return {"ok": True}
 
     def probar(self, sub):
@@ -337,29 +494,169 @@ class Avisos:
 
     def pendientes(self, endpoint):
         with self.lock:
-            return [{"id": a["id"], "cuando": a["cuando"], "texto": a["texto"]} for a in self.avisos if a["sub"]["endpoint"] == endpoint]
+            return {"avisos": [{"id": a["id"], "cuando": a["cuando"], "dep": a["dep"], "linea": a["ref"]["linea"]}
+                               for a in self.avisos if a["sub"]["endpoint"] == endpoint],
+                    "fijos": [{"id": f["id"], "etiqueta": f["etiqueta"], "hora": f["hora"], "dias": f["dias"]}
+                              for f in self.fijos if f["sub"]["endpoint"] == endpoint]}
 
     # -- reloj: se llama muy a menudo desde el bucle principal
     def revisar(self):
         ahora = self.reloj()
         with self.lock:
-            vencidos = [a for a in self.avisos if a["cuando"] <= ahora and a.get("proximo", 0) <= ahora]
+            vencidos = [a for a in self.avisos if not a.get("enviado") and a["cuando"] <= ahora and a.get("proximo", 0) <= ahora]
             for a in vencidos:
                 a["proximo"] = ahora + 45          # no repetir mientras se envía
+            vigilar = [a for a in self.avisos if self._toca_vigilar(a, ahora)]
+            for a in vigilar:
+                a["ult"], a["vig"] = ahora, True
+            caducados = [a["id"] for a in self.avisos if a.get("enviado") and ahora > a["dep"] + 120]
+            fijos = []
+            if self.fijos:
+                d = _dt.datetime.fromtimestamp(ahora)
+                hoy, mn = d.date().isoformat(), d.hour * 60 + d.minute
+                for f in self.fijos:
+                    hh, mm = f["hora"].split(":")
+                    h = int(hh) * 60 + int(mm)
+                    if d.weekday() in f["dias"] and f.get("ultimo") != hoy and f.get("prox", 0) <= ahora \
+                            and h - VENTANA_FIJO_ANTES <= mn <= h + 5:
+                        f["prox"] = ahora + 60
+                        fijos.append((f, h, hoy))
         for a in vencidos:
             threading.Thread(target=self._mandar, args=(a,), daemon=True).start()
+        for a in vigilar:
+            threading.Thread(target=self._vigilar, args=(a,), daemon=True).start()
+        for f, h, hoy in fijos:
+            threading.Thread(target=self._generar, args=(f, h, hoy), daemon=True).start()
+        for i in caducados:
+            self.cancelar(i)
+        self.guardar_si_hace_falta()
+
+    def _toca_vigilar(self, a, ahora):
+        if not a.get("q") or a.get("vig") or not self._plan_fn:
+            return False
+        if ahora - a.get("ult", 0) < (30 if a["cuando"] - ahora < 300 else 60):
+            return False
+        if a.get("enviado"):
+            return ahora < a["dep"]
+        return a["cuando"] - ahora <= VIGILA_ANTES_S
+
+    def _push(self, a, titulo, texto, etiqueta=None):
+        return self._enviar(self.clave, self.contacto, a["sub"], {"titulo": titulo, "texto": texto, "etiqueta": etiqueta or a["id"]})
 
     def _mandar(self, a):
         ahora = self.reloj()
-        if ahora - a["cuando"] > TOLERANCIA_S:
+        if ahora - a["cuando"] > TOLERANCIA_S or a["dep"] < ahora - 60:
             return self.cancelar(a["id"])          # llegó tarde: avisar ya no sirve de nada
-        cod, txt = self._enviar(self.clave, self.contacto, a["sub"],
-                                {"titulo": a["titulo"], "texto": a["texto"], "etiqueta": a["id"]})
-        if 200 <= cod < 300 or cod in (400, 401, 403, 404, 410, 413):
-            if not 200 <= cod < 300:
-                print("Aviso al móvil descartado (%s %s)" % (cod, txt))
+        tit, txt = mensaje_salida(a, ahora)
+        cod, det = self._push(a, tit, txt)
+        if 200 <= cod < 300:
+            a["enviado"], a["dep_anunciada"] = True, a["dep"]
+            with self.lock:
+                self._sucio = True
+            return
+        if cod in (400, 401, 403, 404, 410, 413):
+            print("Aviso al móvil descartado (%s %s)" % (cod, det))
             return self.cancelar(a["id"])
         a["intentos"] = a.get("intentos", 0) + 1
         if a["intentos"] >= 4:
             return self.cancelar(a["id"])
-        print("Aviso al móvil: fallo %s %s; se reintenta" % (cod, txt))
+        print("Aviso al móvil: fallo %s %s; se reintenta" % (cod, det))
+
+    # -- seguimiento en tiempo real
+    def _vigilar(self, a):
+        try:
+            ahora = self.reloj()
+            am = _min_dia(ahora)
+            p = self._plan_fn(a["q"], None)
+            if not isinstance(p, dict) or p.get("cargando") or p.get("preparando"):
+                return
+            ref, v = a["ref"], primer_vehiculo(p, am)
+            if ref["tipo"] == "tren" and self._alertas_fn:
+                nuevas = []
+                for t in self._alertas_fn() or []:
+                    h = hashlib.md5(t.encode("utf-8")).hexdigest()[:8]
+                    if h not in a["vistos"]:
+                        a["vistos"].append(h)
+                        nuevas.append(t)
+                if nuevas:
+                    self._push(a, "⚠️ Aviso de Renfe", " · ".join(nuevas)[:180], a["id"] + "r")
+            m = None
+            for c in ([v] if v else []) + (_alternativas(p) if p.get("ok") else []):
+                if _coincide(ref, c):
+                    m = c
+                    break
+            cancelado = bool(ref.get("id") and self._cancelado_fn and self._cancelado_fn(ref["id"]))
+            if m and not cancelado:
+                a["perdido"] = 0
+                a["retraso"] = m["retraso"]
+                self._mover(a, _dep_abs(m["sale"], ahora), ahora)
+            else:
+                a["perdido"] = a.get("perdido", 0) + 1
+                if cancelado or a["perdido"] >= 2:
+                    self._cambio(a, p, v, cancelado, ahora)
+        except Exception as e:  # noqa: BLE001
+            print("Aviso al móvil: no pude seguirlo (%s)" % e)
+        finally:
+            a["vig"] = False
+
+    def _mover(self, a, dep, ahora):
+        if abs(dep - a["dep"]) < 30:
+            return
+        a["dep"] = dep
+        if not a.get("enviado"):
+            a["cuando"] = max(ahora, dep - (a["andar"] + a["margen"]) * 60)
+            return
+        previo = a.get("dep_anunciada", dep)
+        if dep - previo >= 180 and dep - ahora > 90 and a.get("demoras", 0) < 3:
+            a["demoras"] = a.get("demoras", 0) + 1
+            a["dep_anunciada"] = dep
+            m = int(round((dep - previo) / 60.0))
+            self._push(a, "⏱ Tu %s lleva +%d min" % (a["ref"]["linea"], int(round(a.get("retraso") or m))),
+                       "Ahora sale a las %s. Puedes salir %d min más tarde." % (_hm_ts(dep), m), a["id"] + "d")
+
+    def _cambio(self, a, p, v, cancelado, ahora):
+        ref = a["ref"]
+        if a.get("cambios", 0) >= 3:
+            return
+        if not cancelado:
+            nueva, vieja = p.get("llega"), ref.get("llega")
+            if not v or nueva is None or vieja is None or vieja - 3 <= nueva <= vieja + 2:
+                return                                     # solo es otra opción igual de buena: no molestar
+        prog = _hm_min(ref["prog"])
+        if v:
+            tit = ("❌ Cancelado: tu %s de las %s" % (ref["linea"], prog)) if cancelado else "⚠️ Cambio en tu viaje"
+            txt = "%s %s a las %s desde %s (llegas a las %s)." % ("Alternativa:" if cancelado else "Ahora lo mejor es el", v["linea"],
+                                                                 _hm_min(v["sale"]), v["desde"], _hm_min(p["llega"]))
+        else:
+            tit, txt = "❌ Cancelado: tu %s de las %s" % (ref["linea"], prog), "No veo ninguna alternativa ahora mismo."
+        self._push(a, tit, txt, a["id"] + "c")
+        a["cambios"] = a.get("cambios", 0) + 1
+        a["perdido"] = 0
+        if not v:
+            return
+        a["ref"] = {"tipo": v["tipo"], "linea": v["linea"], "desde": v["desde"], "id": v["id"], "prog": v["prog"], "llega": p.get("llega")}
+        a["andar"], a["retraso"], a["dep"] = v["andar"], v["retraso"], _dep_abs(v["sale"], ahora)
+        a["cuando"] = max(ahora, a["dep"] - (a["andar"] + a["margen"]) * 60)
+        a["enviado"] = a["cuando"] <= ahora          # si ya toca salir, el propio aviso de cambio lo dice
+        a["dep_anunciada"] = a["dep"]
+        with self.lock:
+            self._sucio = True
+
+    # -- avisos fijos: cada día se prepara el del día
+    def _generar(self, f, hora_min, hoy):
+        try:
+            ahora = self.reloj()
+            p = self._plan_fn(f["q"], max(hora_min, int(_min_dia(ahora))))
+            v = primer_vehiculo(p, _min_dia(ahora)) if isinstance(p, dict) else None
+            if not v:
+                return
+            dep = _dep_abs(v["sale"], ahora)
+            r = self.programar(f["sub"], {"en": (dep - ahora) / 60.0, "andar": v["andar"], "margen": f["margen"], "retraso": v["retraso"],
+                                          "linea": v["linea"], "desde": v["desde"], "tipo": v["tipo"], "trip": v["id"],
+                                          "llega": p.get("llega"), "q": f["q"]}, ident="%s|%s" % (f["id"], hoy), fijo=f["id"])
+            if r.get("ok"):
+                f["ultimo"] = hoy
+                with self.lock:
+                    self._sucio = True
+        except Exception as e:  # noqa: BLE001
+            print("Aviso fijo: no pude prepararlo (%s)" % e)
