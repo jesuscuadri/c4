@@ -8,7 +8,7 @@ import time
 import zipfile
 from collections import defaultdict
 
-from .util import CACHE, http_get
+from ..util import CACHE, http_get
 
 GTFS_URLS = ["https://ssl.renfe.com/ftransit/Fichero_CER_FOMENTO/fomento_transit.zip"]
 # Copia pública diaria del mismo fichero, por si la de Renfe falla

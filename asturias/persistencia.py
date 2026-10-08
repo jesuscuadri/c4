@@ -27,7 +27,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime
 
-from . import historial
+from .trenes import historial
 
 API = os.environ.get("C4_GH_API", "https://api.github.com")
 ARCHIVO = "historial.json.gz"

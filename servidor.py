@@ -4,6 +4,6 @@
 Ejecuta el programa directamente desde los archivos de este repositorio, así que cada
 cambio que se sube a GitHub se publica solo.
 """
-import c4_tiempo_real
+import iniciar
 
-c4_tiempo_real.main()
+iniciar.main()

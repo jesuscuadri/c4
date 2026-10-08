@@ -7,7 +7,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from c4 import historial as H  # noqa: E402
+from asturias.trenes import historial as H  # noqa: E402
 
 
 def fila(dia, trip, stop, h, nuestra, real, tipo=None, bruta=None):
@@ -104,7 +104,7 @@ class TestPrecisionSalidas(unittest.TestCase):
 
 class TestSalidaVista(unittest.TestCase):
     def test_detecta_salida(self):
-        from c4.tiemporeal import TiempoReal
+        from asturias.trenes.tiemporeal import TiempoReal
         cfg = {"datos_viejos_s": 600, "intervalo_consulta_s": 15}
         rt = TiempoReal(cfg)
         t0 = 1791400000
@@ -121,7 +121,7 @@ class TestSalidaVista(unittest.TestCase):
         lectura(t0 + 80, "B", "IN_TRANSIT_TO")
         m, fiable = rt.salida_vista[("2078X70201C4", "B")]
         self.assertTrue(fiable)
-        from c4.util import ahora_min
+        from asturias.util import ahora_min
         self.assertAlmostEqual(m, ahora_min(t0 + 70), places=2)
 
 

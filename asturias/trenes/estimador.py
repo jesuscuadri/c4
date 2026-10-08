@@ -2,7 +2,7 @@
 """Simulación de la línea en vía única: calcula a qué hora llegará cada tren a cada estación."""
 from collections import defaultdict
 
-from .util import ahora_min, hm
+from ..util import ahora_min, hm
 
 MOTIVO_MIN = 0.5  # por debajo de esto no merece la pena explicar la espera
 

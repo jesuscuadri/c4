@@ -14,15 +14,15 @@ from datetime import date, datetime, timedelta
 from urllib.parse import parse_qs, urlparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import gtfs
-from . import planificador
-from . import cta
-from .estimador import Estimador
-from .historial import (Precision, aprender_calibracion, correccion, aprender_paradas, aprender_salidas, aprender_sesgos, aprender_tiempos,
+from .trenes import gtfs
+from .trenes import planificador
+from .bus import consorcio
+from .trenes.estimador import Estimador
+from .trenes.historial import (Precision, aprender_calibracion, correccion, aprender_paradas, aprender_salidas, aprender_sesgos, aprender_tiempos,
                         guardar_observaciones, guardar_resumen, resumen)
-from .red import Red
-from .tiemporeal import TiempoReal
-from .emtusa import Emtusa
+from .trenes.red import Red
+from .trenes.tiemporeal import TiempoReal
+from .bus.emtusa import Emtusa
 from .persistencia import Almacen, ciclo_guardado
 from .util import RAIZ, WEB, http_get, ahora_min, distancia_km
 
@@ -395,16 +395,16 @@ class App:
             def preparar():
                 try:
                     with self._cta_lock:      # de una en una: cada red recorre el fichero entero
-                        local = cta.ruta_cache(red, dia)
+                        local = consorcio.ruta_cache(red, dia)
                         nuevo = not os.path.exists(local)
                         if nuevo and self._bajar_horario(local):
                             nuevo = False
-                        d = cta.extraer(red, dia)
+                        d = consorcio.extraer(red, dia)
                     if nuevo:
                         threading.Thread(target=self._subir_horario, args=(local,), daemon=True).start()
                     if manana:
                         d = dict(d, variantes=[dict(v, forma=None) for v in d["variantes"]])   # los recorridos solo de hoy
-                    elif cta.REDES[red].get("formas_aparte"):
+                    elif consorcio.REDES[red].get("formas_aparte"):
                         # los recorridos dibujados pesan mucho: se piden por línea al abrirla en el mapa
                         self._cta_formas[red] = {i: (v["linea"], v["forma"]) for i, v in enumerate(d["variantes"]) if v.get("forma")}
                         d = dict(d, variantes=[dict(v, forma=None) for v in d["variantes"]])
@@ -672,13 +672,13 @@ class App:
 
     def bucle(self):
         # el horario de los buses del Consorcio, preparado de antemano (tarda unos segundos)
-        for red in cta.REDES:
+        for red in consorcio.REDES:
             try:
                 self.red_cta(red)
             except Exception:  # noqa: BLE001
                 pass
         # y el de mañana de los interurbanos (el buscador de viajes), para que «Mañana» salga al instante
-        for red, c in cta.REDES.items():
+        for red, c in consorcio.REDES.items():
             if c.get("tipo") == "interurbano":
                 try:
                     self.red_cta(red, True)
@@ -847,11 +847,11 @@ def servir(app, abrir=True, en_red=False, publico=False):
                 return self._json({"ok": True, "hora": datetime.now().strftime("%H:%M:%S")})
             if ruta == "/api/cta/redes":
                 return self._json({"redes": [{"id": k, "nombre": v["nombre"], "color": v["color"], "tipo": v.get("tipo", "urbano")}
-                                             for k, v in cta.REDES.items()]})
+                                             for k, v in consorcio.REDES.items()]})
             if ruta == "/api/cta/red":
                 q = parse_qs(urlparse(self.path).query)
                 red = q.get("red", ["aviles"])[0]
-                if red not in cta.REDES:
+                if red not in consorcio.REDES:
                     return self._json({"error": "No conozco esa red."})
                 man = q.get("dia", [""])[0] == "manana"
                 c = app.red_cta(red, man)
@@ -868,11 +868,11 @@ def servir(app, abrir=True, en_red=False, publico=False):
                 for red, (dia, d) in list(getattr(app, "_cta_datos", {}).items()):
                     if dia != date.today():
                         continue
-                    ps = cta.cercanas(d, lat, lon, ahora)
+                    ps = consorcio.cercanas(d, lat, lon, ahora)
                     if ps:
                         out.append({"red": red, "nombre": d.get("titulo") or d["nombre"], "color": d["color"], "paradas": ps})
                 out.sort(key=lambda r: r["paradas"][0]["metros"])
-                return self._json({"redes": out, "cargadas": len(getattr(app, "_cta_datos", {})), "total": len(cta.REDES)})
+                return self._json({"redes": out, "cargadas": len(getattr(app, "_cta_datos", {})), "total": len(consorcio.REDES)})
             if ruta == "/api/cta/formas":
                 q = parse_qs(urlparse(self.path).query)
                 red, lin = q.get("red", [""])[0], q.get("linea", [""])[0]
@@ -951,7 +951,7 @@ def servir(app, abrir=True, en_red=False, publico=False):
                 ruta = "/index.html"
             if ruta.startswith("/bus/") or ruta.startswith("/cta/"):
                 pref = ruta[:5]
-                raiz = os.path.join(RAIZ, "web-bus" if pref == "/bus/" else "web-cta")
+                raiz = os.path.join(RAIZ, "web-gijon" if pref == "/bus/" else "web-consorcio")
                 fichero = os.path.normpath(os.path.join(raiz, ruta[len(pref):]))
                 base = os.path.normpath(raiz)
             else:

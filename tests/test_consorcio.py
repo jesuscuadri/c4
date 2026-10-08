@@ -9,7 +9,7 @@ from datetime import date
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from c4 import cta  # noqa: E402
+from asturias.bus import consorcio as cta  # noqa: E402
 
 
 def zip_cta():

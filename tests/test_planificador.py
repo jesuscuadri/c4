@@ -10,11 +10,11 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from c4.emtusa import Emtusa  # noqa: E402
-from c4.estimador import Estimador  # noqa: E402
-from c4.linea import Linea  # noqa: E402
-from c4 import planificador as P  # noqa: E402
-from c4.util import CONFIG_DEFECTO  # noqa: E402
+from asturias.bus.emtusa import Emtusa  # noqa: E402
+from asturias.trenes.estimador import Estimador  # noqa: E402
+from asturias.trenes.linea import Linea  # noqa: E402
+from asturias.trenes import planificador as P  # noqa: E402
+from asturias.util import CONFIG_DEFECTO  # noqa: E402
 
 DATOS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "datos", "horario_C4_20260923.json")
 

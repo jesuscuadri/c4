@@ -5,7 +5,7 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from c4.emtusa import Emtusa, _limpia  # noqa: E402
+from asturias.bus.emtusa import Emtusa, _limpia  # noqa: E402
 
 
 class FakeBus(Emtusa):

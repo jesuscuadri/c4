@@ -4,7 +4,7 @@
 Dos fuentes de datos, separadas a propósito:
 
   · La RED (qué líneas hay, por qué paradas pasan y en qué orden) se guarda en
-    disco, en ``c4/datos/red_emtusa.json``. Así el buscador de paradas, el mapa y
+    disco, en ``asturias/bus/datos/red_emtusa.json``. Así el buscador de paradas, el mapa y
     el planificador de viajes funcionan al instante y sin depender de la red. Ese
     fichero se generó leyendo la API pública de EMTUSA y el servidor lo puede
     refrescar de vez en cuando (``refrescar_red``) cuando tiene salida a internet.
@@ -25,7 +25,7 @@ import time
 import urllib.parse
 import urllib.request
 
-from .util import distancia_km, normaliza
+from ..util import distancia_km, normaliza
 
 BASE = os.environ.get("C4_BUS_BASE", "https://emtusasiri.pub.gijon.es/emtusasiri/")
 USER = os.environ.get("C4_BUS_USER", "info@vitesia.com")

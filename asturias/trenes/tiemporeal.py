@@ -7,7 +7,7 @@ import time
 import urllib.error
 import urllib.request
 
-from .util import ahora_min
+from ..util import ahora_min
 
 
 def http_get_cond(url, desde=None, timeout=20):

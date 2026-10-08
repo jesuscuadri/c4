@@ -15,10 +15,10 @@ Necesitas Python 3.8 o superior (Render usa el de `.python-version`). No hay que
 
 | Qué quieres | Cómo |
 |---|---|
-| Abrir la web | Doble clic en `iniciar.bat` (o `python c4_tiempo_real.py`) → se abre http://localhost:8765 |
-| Verlo en el móvil (misma wifi) | `python c4_tiempo_real.py --movil`. Te dice la dirección que tienes que abrir en el móvil |
-| Consulta rápida por consola | `python c4_tiempo_real.py --consulta Xivares Gijon` |
-| Forzar descarga del horario | `python c4_tiempo_real.py --actualizar-horario` |
+| Abrir la web | Doble clic en `iniciar.bat` (o `python iniciar.py`) → se abre http://localhost:8765 |
+| Verlo en el móvil (misma wifi) | `python iniciar.py --movil`. Te dice la dirección que tienes que abrir en el móvil |
+| Consulta rápida por consola | `python iniciar.py --consulta Xivares Gijon` |
+| Forzar descarga del horario | `python iniciar.py --actualizar-horario` |
 | Pasar las pruebas | `python -m unittest discover tests` |
 
 ### En el iPhone
@@ -87,24 +87,33 @@ Usa la pestaña **Precisión** para decidir los ajustes. Si el sesgo sale positi
 ## Estructura
 
 ```
-c4_tiempo_real.py   programa principal (y modo consulta por consola)
-servidor.py         arranque en Render
-c4/gtfs.py          descarga y lectura del horario de Renfe (Cercanías, regionales, larga distancia)
-c4/red.py           modelo de la red: estaciones, apartaderos, cruces, rotaciones
-c4/linea.py         alias de red.py (compatibilidad con las pruebas)
-c4/tiemporeal.py    lectura del tiempo real de Renfe
-c4/estimador.py     simulación de la vía única
-c4/historial.py     observaciones, aprendizaje y medida de precisión
-c4/planificador.py  «Ir a…»: rutas puerta a puerta con transbordos, bus urbano y andar
-c4/emtusa.py        autobús urbano de Gijón (EMTUSA) en tiempo real
-c4/cta.py           buses del Consorcio de Transportes de Asturias (GTFS): urbanos e interurbanos
-c4/persistencia.py  guarda lo aprendido y los horarios ya procesados en la rama «datos» de GitHub
-c4/app.py           servidor web y API
-web/                interfaz de trenes (HTML, CSS, JS; mapa con Leaflet)
-web-bus/            interfaz del bus de Gijón
-web-cta/            interfaz de los buses del Consorcio
-tests/              pruebas (horario real, posiciones reales, muestras del Consorcio)
-.github/workflows/  despierta el servidor de Render de madrugada
+servidor.py              arranque en internet (Render)
+iniciar.py               arranque en tu ordenador (y consulta por consola)
+iniciar.bat              doble clic para abrir la web en Windows
+iniciar_con_iphone.bat   lo mismo, accesible desde el móvil por la wifi
+
+asturias/                el programa
+  app.py                   servidor web y API
+  util.py                  rutas, configuración, distancias, horas
+  persistencia.py          guarda lo aprendido y los horarios ya procesados en la rama «datos» de GitHub
+  trenes/                  todo lo de Renfe
+    gtfs.py                  horario de Renfe (Cercanías, regionales, larga distancia)
+    red.py                   modelo de la red: estaciones, apartaderos, cruces, rotaciones
+    linea.py                 alias de red.py (lo usan las pruebas)
+    tiemporeal.py            lectura del tiempo real de Renfe
+    estimador.py             simulación de la vía única
+    historial.py             observaciones, aprendizaje y medida de precisión
+    planificador.py          «Ir a…»: rutas puerta a puerta con transbordos, bus urbano y andar
+  bus/                     autobuses
+    emtusa.py                Gijón (EMTUSA) en tiempo real
+    consorcio.py             Consorcio de Transportes de Asturias (GTFS): urbanos e interurbanos
+    datos/red_emtusa.json    red de EMTUSA (paradas y líneas)
+
+web/                     interfaz de trenes y pantalla de inicio (PWA)
+web-gijon/               interfaz del bus de Gijón        → se sirve en /bus/
+web-consorcio/           interfaz de los buses del Consorcio → se sirve en /cta/
+tests/                   pruebas (horario real, posiciones reales, muestras del Consorcio)
+.github/workflows/       despierta el servidor de Render de madrugada
 ```
 
 ## Límites

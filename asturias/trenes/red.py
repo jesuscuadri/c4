@@ -21,7 +21,7 @@ import heapq
 import math
 from collections import Counter, defaultdict
 
-from .util import distancia_km, normaliza
+from ..util import distancia_km, normaliza
 
 
 # Regionales y larga distancia: solo se tiene el trozo que va por la red de Cercanías, así que sus

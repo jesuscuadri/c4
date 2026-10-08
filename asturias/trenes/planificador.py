@@ -18,8 +18,8 @@ import json
 import urllib.parse
 import urllib.request
 
-from .emtusa import MIN_POR_PARADA, andar_min
-from .util import distancia_km, hm, hm_salida, normaliza
+from ..bus.emtusa import MIN_POR_PARADA, andar_min
+from ..util import distancia_km, hm, hm_salida, normaliza
 
 # umbrales (metros / minutos)
 ANDAR_DIRECTO_MAX = 1300     # si la estación está más cerca que esto, se va andando (sin bus)

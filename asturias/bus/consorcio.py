@@ -22,7 +22,7 @@ import time
 import zipfile
 from collections import Counter, defaultdict
 
-from .util import CACHE, http_get
+from ..util import CACHE, http_get
 
 # Copia pública diaria del GTFS del Consorcio (el original del Punto de Acceso Nacional pide registro)
 CTA_URLS = ["https://files.mobilitydatabase.org/mdb-2827/latest.zip"]

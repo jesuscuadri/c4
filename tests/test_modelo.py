@@ -11,10 +11,10 @@ from datetime import date, datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from c4.estimador import Estimador, viajes_entre  # noqa: E402
-from c4.linea import Linea  # noqa: E402
-from c4.tiemporeal import TiempoReal  # noqa: E402
-from c4.util import CONFIG_DEFECTO  # noqa: E402
+from asturias.trenes.estimador import Estimador, viajes_entre  # noqa: E402
+from asturias.trenes.linea import Linea  # noqa: E402
+from asturias.trenes.tiemporeal import TiempoReal  # noqa: E402
+from asturias.util import CONFIG_DEFECTO  # noqa: E402
 
 DATOS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "datos", "horario_C4_20260923.json")
 MEDIANOCHE = datetime.combine(date.today(), datetime.min.time()).timestamp()

@@ -1,7 +1,7 @@
 import base64
 import unittest
 
-from c4.persistencia import Almacen
+from asturias.persistencia import Almacen
 
 
 class Falso(Almacen):

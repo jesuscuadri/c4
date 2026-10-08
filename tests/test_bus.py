@@ -6,7 +6,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from c4.emtusa import Emtusa, _limpia  # noqa: E402
+from asturias.bus.emtusa import Emtusa, _limpia  # noqa: E402
 
 
 class TestBus(unittest.TestCase):
@@ -42,7 +42,7 @@ class TestBus(unittest.TestCase):
 
     def test_trazado_por_calles(self):
         # cada recorrido tiene su trazado por las calles y cada parada cae sobre él
-        from c4.util import distancia_km
+        from asturias.util import distancia_km
         con = [t for t in self.e.trayectos if t.get("forma")]
         self.assertGreater(len(con), 0.9 * len(self.e.trayectos))
         for t in con:

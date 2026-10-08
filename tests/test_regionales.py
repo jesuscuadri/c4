@@ -9,9 +9,9 @@ from datetime import date
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from c4 import gtfs  # noqa: E402
-from c4.tiemporeal import TiempoReal  # noqa: E402
-from c4.historial import num_servicio, linea_de  # noqa: E402
+from asturias.trenes import gtfs  # noqa: E402
+from asturias.trenes.tiemporeal import TiempoReal  # noqa: E402
+from asturias.trenes.historial import num_servicio, linea_de  # noqa: E402
 
 
 def zip_ld():

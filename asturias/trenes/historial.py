@@ -8,7 +8,7 @@ import time
 from collections import defaultdict
 from datetime import date, timedelta
 
-from .util import HIST
+from ..util import HIST
 
 HORIZONTES = (5, 10, 20, 30)  # minutos de antelación a los que se evalúa la estimación
 

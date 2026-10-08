@@ -4,10 +4,10 @@
 C-4 Cercanías Asturias (Gijón – Cudillero): hora de llegada real teniendo en cuenta
 los cruces en vía única, las rotaciones de material y los trenes de delante.
 
-    python c4_tiempo_real.py                      abre la web local (http://localhost:8765)
-    python c4_tiempo_real.py --movil              además accesible desde el móvil en la misma wifi
-    python c4_tiempo_real.py --consulta Xivares Gijon
-    python c4_tiempo_real.py --actualizar-horario
+    python iniciar.py                      abre la web local (http://localhost:8765)
+    python iniciar.py --movil              además accesible desde el móvil en la misma wifi
+    python iniciar.py --consulta Xivares Gijon
+    python iniciar.py --actualizar-horario
 
 Solo necesita Python 3.8 o superior (biblioteca estándar).
 """
@@ -22,10 +22,10 @@ import time
 if sys.version_info < (3, 8):
     sys.exit("Hace falta Python 3.8 o superior.")
 
-from c4 import gtfs  # noqa: E402
-from c4.app import App, servir  # noqa: E402
-from c4.estimador import viajes_entre  # noqa: E402
-from c4.util import CACHE, cargar_config, hm  # noqa: E402
+from asturias.trenes import gtfs  # noqa: E402
+from asturias.app import App, servir  # noqa: E402
+from asturias.trenes.estimador import viajes_entre  # noqa: E402
+from asturias.util import CACHE, cargar_config, hm  # noqa: E402
 
 
 def imprimir_consulta(app, origen, destino):
