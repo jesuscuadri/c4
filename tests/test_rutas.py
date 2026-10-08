@@ -185,7 +185,9 @@ class TestRutas(unittest.TestCase):
         self.assertEqual(g.concejo_por_prefijo("cabral")["nombre"], "Cabrales")     # mientras se escribe
         self.assertIsNone(g.concejo_por_prefijo("zzzz"))
         self.assertIsNone(g.buscar_concejo("Iglesia"))            # palabra común
-        self.assertIsNone(g.buscar_concejo("Villabus"))           # ya es un pueblo, solo 2 paradas con ese nombre
+        self.assertIsNone(g.buscar_concejo("Final"))              # una sola parada: no es un conjunto
+        p2 = g.buscar_concejo("Villabus")                         # dos paradas con ese nombre: ya vale
+        self.assertEqual(len(p2["nodos"]), 2)
 
     def test_dos_paseos_seguidos_se_unen(self):
         et = [{"tipo": "andar", "desde": "A", "hasta": "B", "metros": 100, "min": 1.5},

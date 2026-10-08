@@ -133,7 +133,7 @@ class Grafo:
             clave = " " + n + " "
             ns = [i for i, k in self._nn if clave in k.replace("-", " ").replace("(", " ").replace(")", " ").replace(",", " ")]
             grupo = None
-            if len(ns) >= 3:
+            if len(ns) >= 2:
                 c = self._centro_de(ns)
                 d = sorted(distancia_km(c, (self.nodos[i][3], self.nodos[i][4])) for i in ns)
                 if d[int(0.8 * (len(d) - 1))] <= 15.0:
