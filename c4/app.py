@@ -630,6 +630,13 @@ class App:
                 self.red_cta(red)
             except Exception:  # noqa: BLE001
                 pass
+        # y el de mañana de los interurbanos (el buscador de viajes), para que «Mañana» salga al instante
+        for red, c in cta.REDES.items():
+            if c.get("tipo") == "interurbano":
+                try:
+                    self.red_cta(red, True)
+                except Exception:  # noqa: BLE001
+                    pass
         # antes de nada, recuperar lo aprendido (el disco de Render llega vacío tras cada reinicio)
         if self.almacen.activo:
             self.almacen.cargar()

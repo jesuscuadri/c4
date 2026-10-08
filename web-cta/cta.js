@@ -61,8 +61,8 @@ let HOY = null, MANANA = null, DIA = 0;
 async function setDia(d) {
   if (d === DIA) return true;
   if (d === 1 && !MANANA) {
-    $("iv-res").innerHTML = `<div class="vacio">Preparando el horario de mañana…</div>`;
-    for (let i = 0; i < 40; i++) {
+    $("iv-res").innerHTML = `<div class="vacio">Preparando el horario de mañana…<br><small>La primera vez puede tardar un minuto; luego es instantáneo.</small></div>`;
+    for (let i = 0; i < 90; i++) {
       try {
         const j = await (await fetch("/api/cta/red?red=" + encodeURIComponent(RED_ID) + "&dia=manana")).json();
         if (j.error && !j.cargando) { toast("No hay horario de mañana todavía"); return false; }
