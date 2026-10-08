@@ -93,6 +93,18 @@ class TestOviedo(unittest.TestCase):
         self.assertEqual(len(d["viajes"]), 24)
 
 
+class TestCercanas(unittest.TestCase):
+    def test_paradas_cerca_con_sus_salidas(self):
+        d = cta.extraer("oviedo", date(2026, 10, 8), zip_cta=os.path.join(DATOS, "cta_oviedo_muestra.zip"))
+        sid = next(iter(d["paradas"]))
+        _, _, la, lo = d["paradas"][sid]
+        out = cta.cercanas(d, la, lo, 0, horizonte=1440, radio_m=100)
+        self.assertTrue(out)
+        self.assertEqual(out[0]["metros"], 0)
+        self.assertTrue(all(g["t"] == sorted(g["t"]) for p in out for g in p["salidas"]))
+        self.assertEqual(cta.cercanas(d, 0.0, 0.0, 0), [])           # lejos de todo: nada
+
+
 class TestTildes(unittest.TestCase):
     def test_restaura_tildes(self):
         self.assertEqual(cta.limpia_parada("[OVIEDO] Plaza America")[0], "Plaza América")

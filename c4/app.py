@@ -382,7 +382,7 @@ class App:
         """Horario de hoy de una red de bus del Consorcio, ya en JSON (y comprimido). Se prepara en
         segundo plano la primera vez (el fichero del Consorcio pesa ~6 MB)."""
         if not hasattr(self, "_cta"):
-            self._cta, self.error_cta, self._cta_en, self._cta_formas = {}, {}, set(), {}
+            self._cta, self.error_cta, self._cta_en, self._cta_formas, self._cta_datos = {}, {}, set(), {}, {}
             self._cta_lock = threading.Lock()
         dia = date.today() + timedelta(days=1 if manana else 0)
         clave = red + "+1" if manana else red
@@ -404,6 +404,8 @@ class App:
                         d = dict(d, variantes=[dict(v, forma=None) for v in d["variantes"]])
                     crudo = json.dumps(d, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
                     self._cta[clave] = (dia, (crudo, gzip.compress(crudo, 6)))
+                    if not manana:
+                        self._cta_datos[red] = (dia, d)
                     self.error_cta.pop(clave, None)
                     print("Bus %s: %d líneas · %d paradas · %d viajes hoy" % (
                         d["nombre"], len(d["lineas"]), len(d["paradas"]), len(d["viajes"])))
@@ -796,6 +798,21 @@ def servir(app, abrir=True, en_red=False, publico=False):
                 if c is None:
                     return self._json({"cargando": True, "error": app.error_cta.get(red + "+1" if man else red)})
                 return self._enviar(c[0], "application/json; charset=utf-8", gz=c[1])
+            if ruta == "/api/cta/cercanas":
+                q = parse_qs(urlparse(self.path).query)
+                try:
+                    lat, lon = float(q["lat"][0]), float(q["lon"][0])
+                except (KeyError, ValueError):
+                    return self._json({"error": "faltan lat y lon"})
+                out, ahora = [], ahora_min()
+                for red, (dia, d) in list(getattr(app, "_cta_datos", {}).items()):
+                    if dia != date.today():
+                        continue
+                    ps = cta.cercanas(d, lat, lon, ahora)
+                    if ps:
+                        out.append({"red": red, "nombre": d.get("titulo") or d["nombre"], "color": d["color"], "paradas": ps})
+                out.sort(key=lambda r: r["paradas"][0]["metros"])
+                return self._json({"redes": out, "cargadas": len(getattr(app, "_cta_datos", {})), "total": len(cta.REDES)})
             if ruta == "/api/cta/formas":
                 q = parse_qs(urlparse(self.path).query)
                 red, lin = q.get("red", [""])[0], q.get("linea", [""])[0]

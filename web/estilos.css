@@ -564,3 +564,4 @@ h2 .num-t{font-size:13px}
 .el-ciudades[hidden]{display:none}
 .el-sub{color:var(--tx2);font-weight:700;font-size:14px}
 .el-ciudad{padding:14px 16px}.el-ciudad b{font-size:18px}.el-ciudad .el-ic{font-size:30px}
+.cerca-bus .lb{display:inline-block;color:#fff;font-weight:800;font-size:12px;border-radius:6px;padding:2px 7px;min-width:24px;text-align:center}

@@ -439,3 +439,50 @@ def extraer(red, dia, zip_cta=None):
 def _orden(c):
     m = re.match(r"[A-Za-z]*(\d+)", c or "")
     return (int(m.group(1)) if m else 999, c)
+
+
+def cercanas(d, lat, lon, ahora, radio_m=600, n_paradas=2, horizonte=120, max_grupos=4):
+    """Paradas de una red a menos de radio_m de un punto, con sus próximos autobuses (según horario).
+    `ahora` en minutos desde la medianoche. Devuelve [] si no hay ninguna cerca."""
+    import math
+    coslat = math.cos(math.radians(lat))
+    cerca = []
+    for sid, (nom, loc, la, lo) in d["paradas"].items():
+        m = math.hypot((lo - lon) * 111.32 * coslat, (la - lat) * 110.57) * 1000
+        if m <= radio_m:
+            cerca.append((m, sid))
+    cerca.sort()
+    cerca = cerca[:n_paradas]
+    if not cerca:
+        return []
+    ids = {sid for _, sid in cerca}
+    viajes_de = {}
+    for vi, sal, p in d["viajes"]:
+        viajes_de.setdefault(vi, []).append((sal, p))
+    grupos = {sid: {} for sid in ids}
+    for vi, v in enumerate(d["variantes"]):
+        ps, perm = v["paradas"], v.get("perm")
+        for i, s in enumerate(ps):
+            if s not in ids:
+                continue
+            if i == len(ps) - 1 and ps[0] != s:
+                continue                      # aquí termina
+            if perm and not perm[i]:
+                continue                      # aquí solo se baja
+            for sal, p in viajes_de.get(vi, ()):
+                for base in (0, -1440):
+                    t = sal + base + d["patrones"][p][i]
+                    if ahora - 0.5 <= t <= ahora + horizonte:
+                        g = grupos[s].setdefault((v["linea"], v["destino"]), [])
+                        g.append(round(t, 1))
+    out = []
+    for m, sid in cerca:
+        nom, loc, la, lo = d["paradas"][sid]
+        gs = []
+        for (lin, dest), ts in grupos[sid].items():
+            l = d["lineas"].get(lin, {})
+            gs.append({"linea": l.get("codigo", lin), "color": l.get("color", "#666"), "destino": dest,
+                       "t": sorted(set(ts))[:3]})
+        gs.sort(key=lambda g: g["t"][0])
+        out.append({"id": sid, "nombre": nom, "loc": loc, "metros": round(m), "salidas": gs[:max_grupos]})
+    return out

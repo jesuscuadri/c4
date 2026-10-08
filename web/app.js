@@ -1609,6 +1609,18 @@ function inicioCerca() {
           `<a class="link" href="/bus/" style="display:inline-block;margin-top:8px">Abrir el mapa de buses en vivo ›</a></div>`
         : "";
     } catch (err) { const el = $("cb"); if (el) el.remove(); }
+    // los autobuses del Consorcio (Oviedo, Avilés, Mieres e interurbanos): horario oficial
+    try {
+      const j = await pedir(`/api/cta/cercanas?lat=${yo[0]}&lon=${yo[1]}`, 9000);
+      const ahora = new Date(), nm = ahora.getHours() * 60 + ahora.getMinutes();
+      const hm2 = (t) => String(Math.floor(t / 60) % 24).padStart(2, "0") + ":" + String(Math.floor(t) % 60).padStart(2, "0");
+      const en = (t) => { const m = Math.floor(t - nm); return m <= 0 ? "ya" : m < 60 ? m + " min" : hm2(t); };
+      const filas = (j.redes || []).map((r) => r.paradas.map((p) => `<div class="cerca-bus"><div class="ce-cab">🚌 <b>${esc(p.nombre)}</b> <span class="sub">${esc(p.loc || r.nombre)} · a ${p.metros} m</span></div>` +
+        (p.salidas.length ? p.salidas.map((g) => `<div class="ce-fila"><span class="ce-dest"><span class="lb" style="background:${esc(g.color)}">${esc(g.linea)}</span> → ${esc(g.destino)}</span><b class="num">${g.t.map(en).join(" · ")}</b></div>`).join("")
+          : `<div class="vacio">Sin salidas en las próximas 2 horas.</div>`) +
+        `<a class="link" href="/cta/?red=${encodeURIComponent(r.red)}#cerca" style="display:inline-block;margin-top:6px">${esc(r.nombre)} · horario oficial ›</a></div>`).join("")).join("");
+      if (filas) res.insertAdjacentHTML("beforeend", filas);
+    } catch (err) { /* sin buses del Consorcio */ }
   }, () => {
     b.disabled = false; b.textContent = "📍 Estaciones y buses cerca de mí";
     res.innerHTML = `<div class="vacio">No se pudo obtener la ubicación.</div>`;
