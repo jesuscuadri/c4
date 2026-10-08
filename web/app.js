@@ -1882,8 +1882,8 @@ function pintarPlan(p, box) {
     } else if (e.tipo === "autobus") {
       const lugar = (n, loc) => esc(n) + (loc && !n.toLowerCase().includes(loc.toLowerCase()) ? ` <span class="et-sub2">· ${esc(loc)}</span>` : "");
       h += `<li class="et bus"><span class="et-ico">🚌</span><div class="et-cuerpo">
-        <div class="et-t"><span class="bus-chip" style="background:${esc(e.color)}">${esc(e.linea)}</span> hacia ${esc(e.destino)} <span class="et-min aprox">horario</span></div>
-        <div class="et-horas num"><span>${esc(e.sale_hm)} <b>${lugar(e.subir, e.subir_loc)}</b></span><span class="et-fl">→</span><span>${esc(e.llega_hm)} <b>${lugar(e.bajar, e.bajar_loc)}</b></span></div>
+        <div class="et-t"><span class="bus-chip" style="background:${esc(e.color)}">${esc(e.linea)}</span> hacia ${esc(e.destino)} <span class="et-min aprox">${e.frecuencia ? "frecuencia" : "horario"}</span></div>
+        <div class="et-horas num"><span>${e.frecuencia ? "~" : ""}${esc(e.sale_hm)} <b>${lugar(e.subir, e.subir_loc)}</b></span><span class="et-fl">→</span><span>${e.frecuencia ? "~" : ""}${esc(e.llega_hm)} <b>${lugar(e.bajar, e.bajar_loc)}</b></span></div>
         <div class="et-sub">${e.nombre_linea ? esc(e.nombre_linea) + " · " : ""}${e.operador ? esc(e.operador) + " · " : ""}${e.paradas} ${e.paradas === 1 ? "parada" : "paradas"}${e.espera >= 3 ? ` · esperas ${Math.round(e.espera)} min` : ""}</div></div></li>`;
     } else if (e.tipo === "transbordo") {
       h += `<li class="et transbordo"><span class="et-ico">⇄</span><div class="et-cuerpo">
@@ -1899,6 +1899,7 @@ function pintarPlan(p, box) {
     }
   }
   h += `</ol>` + avisameHtml(p);
+  if ((p.etapas || []).some((e) => e.frecuencia)) h += `<div class="ir-aviso">El bus urbano de Gijón (EMTUSA) no publica su horario: sus horas son aproximadas (un bus cada pocos minutos). Calcula un margen.</div>`;
   if (p.alternativas && p.alternativas.length)
     h += `<div class="ir-alt"><div class="ir-alt-t">${p.es_manana ? "Los siguientes" : "Si no te da tiempo"}</div>` + p.alternativas.map((a) =>
       `<div class="ir-alt-f num"><span>${a.vehiculos ? a.vehiculos.map((v) => v.tipo === "bus" ? `<span class="bus-chip" style="background:${esc(v.color)}">${esc(v.linea)}</span>` : chipLinea(v.linea)).join(" ") : (a.lineas || []).map(chipLinea).join(" ")} <b>${a.sale_hm}</b>${a.desde && a.desde !== p.estacion_sub ? ` desde ${esc(nombreCorto(a.desde))}` : ""}${a.retraso >= 1 && a.con_datos ? ` <span class="tag warn" style="margin:0">+${Math.round(a.retraso)}</span>` : ""}</span>

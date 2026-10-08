@@ -554,7 +554,8 @@ def _etapa_bus(g, x, espera):
             "operador": L.get("operador", ""), "destino": ruta["destino"],
             "subir": nsub[2], "subir_loc": nsub[5], "bajar": nbaj[2], "bajar_loc": nbaj[5],
             "sale": round(sale, 2), "llega": round(llega, 2), "sale_hm": hm_salida(sale), "llega_hm": hm(llega),
-            "paradas": x["j"] - x["i"], "espera": round(max(0.0, espera), 1), "horario": True}
+            "paradas": x["j"] - x["i"], "espera": round(max(0.0, espera), 1), "horario": True,
+            "frecuencia": bool(L.get("frecuencia"))}
 
 
 def _unir_paseos(etapas):
@@ -732,23 +733,36 @@ def planificar(g, res, bus, origen, destino, ahora, en_vivo=True, horizonte=HORI
 
 def planificar_llegada(g, res, bus, origen, destino, limite, desde=0.0, en_vivo=False):
     """Llegar antes de una hora: el viaje que sale más tarde y aun así llega a tiempo.
-    Se prueba el primer viaje posible y se va retrasando la salida mientras se siga llegando."""
-    t = max(desde, limite - 240.0)
-    mejor, primero = None, None
-    for _ in range(30):
-        p = planificar(g, res, bus, origen, destino, t, en_vivo=en_vivo, horizonte=max(60.0, limite - t + 60.0),
-                       con_alt=False)
-        if primero is None:
-            primero = p
-        if not p.get("ok") or "sale" not in p or "llega" not in p or p["llega"] > limite + 1e-6:
-            break
-        mejor = p
-        t = max(t + 1.0, p["sale"] + 1.0)
-    if mejor is None:
+    Si se puede salir a una hora también se puede salir antes, así que se busca por bisección la hora de salida
+    más tarde que aún llega a tiempo (con autobuses urbanos cada pocos minutos, ir uno a uno no bastaría)."""
+    t0 = max(desde, limite - 240.0)
+
+    def plan_en(t):
+        return planificar(g, res, bus, origen, destino, t, en_vivo=en_vivo, horizonte=max(60.0, limite - t + 60.0), con_alt=False)
+
+    def a_tiempo(p):
+        return p.get("ok") and "sale" in p and "llega" in p and p["llega"] <= limite + 1e-6
+
+    primero = plan_en(t0)
+    if not a_tiempo(primero):
         if primero.get("ok") and "llega" in primero:
             primero = dict(primero, ok=False, error="No hay forma de llegar antes de las %s: lo más pronto llegas a las %s." % (
                 hm(limite), primero["llega_hm"]))
         return primero
+    mejor, lo, hi = primero, t0, limite
+    for _ in range(12):
+        if hi - lo <= 0.75:
+            break
+        mid = (lo + hi) / 2.0
+        p = plan_en(mid)
+        if a_tiempo(p):
+            mejor, lo = p, mid
+        else:
+            hi = mid
+    # el último plan bueno puede salir un poco después de `lo`: se prueba justo tras su salida
+    p = plan_en(mejor["sale"] + 0.5)
+    if a_tiempo(p) and p["sale"] > mejor["sale"]:
+        mejor = p
     mejor["alternativas"] = []
     mejor["limite_hm"] = hm(limite)
     return mejor

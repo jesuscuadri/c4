@@ -17,7 +17,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from .trenes import gtfs
 from .trenes import planificador
 from . import push, rutas
-from .bus import consorcio
+from .bus import consorcio, emtusa_horario
 from .trenes.estimador import Estimador
 from .trenes.historial import (Precision, aprender_calibracion, correccion, aprender_paradas, aprender_salidas, aprender_sesgos, aprender_tiempos,
                         guardar_observaciones, guardar_resumen, resumen)
@@ -643,6 +643,18 @@ class App:
                 "paradas": [{"estacion": nom.get(s, s), "min": m}
                             for s, m in sorted(par_d.items(), key=lambda kv: -kv[1])[:12]]}
 
+    def red_emtusa(self, dia):
+        """Los urbanos de Gijón como una red más (horario por frecuencia), uno por día y siempre el mismo objeto."""
+        cache = self.__dict__.setdefault("_emtusa_redes", {})
+        if dia not in cache:
+            try:
+                cache.clear()
+                cache[dia] = emtusa_horario.como_red(self.bus, dia)
+            except Exception:  # noqa: BLE001
+                traceback.print_exc()
+                cache[dia] = None
+        return cache[dia]
+
     def grafo_rutas(self):
         """El grafo de trenes + autobuses del día (None si aún no están los horarios de los autobuses)."""
         with self.lock:
@@ -650,6 +662,10 @@ class App:
         datos = getattr(self, "_cta_datos", {})
         hoy = date.today()
         redes = {r: d for r, (dia, d) in list(datos.items()) if dia == hoy}
+        if redes:
+            e = self.red_emtusa(hoy)
+            if e:
+                redes["emtusa"] = e
         if est is None or not redes:
             self.diag_grafo = {"sin_estaciones": est is None, "redes_hoy": sorted(redes),
                                "redes_cargadas": {r: str(dia) for r, (dia, _) in list(datos.items())}, "hoy": str(hoy)}
@@ -726,6 +742,8 @@ class App:
                     c = self._cta.get(red + "+1")
                     if c and c[0] == manana:
                         redes[red] = json.loads(c[1][0])
+                if redes and self.red_emtusa(manana):
+                    redes["emtusa"] = self.red_emtusa(manana)
                 if self._manana[0] != manana:
                     self._manana = (manana, gtfs.extraer_red(self.cfg, manana))
                 with self.lock:

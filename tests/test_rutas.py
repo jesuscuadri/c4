@@ -220,5 +220,48 @@ class TestRutas(unittest.TestCase):
         self.assertTrue(any(j == ia for j, _ in self.g.pie[i3]))
 
 
+class FalsoEmtusa:
+    """Una línea urbana U1 de 3 paradas: Cerillero (junto a S3 de la estación de A) → Centro → Campus (~4 km)."""
+    red_ok = True
+    lineas_d = {"1": {"id": 1, "codigo": "U1", "color": "#169CD8", "nombre": "CERILLERO - CAMPUS"},
+                "2": {"id": 2, "codigo": "B1", "color": "#000000", "nombre": "BUHO 1 - X"}}
+    paradas_d = {1: {"id": 1, "nombre": "Cerillero", "lat": 43.5013, "lon": -5.8009, "lineas": ["U1"]},
+                 2: {"id": 2, "nombre": "Centro", "lat": 43.5200, "lon": -5.8000, "lineas": ["U1"]},
+                 3: {"id": 3, "nombre": "Campus", "lat": 43.5400, "lon": -5.7900, "lineas": ["U1"]}}
+    trayectos = [{"linea": 1, "codigo": "U1", "color": "#169CD8", "destino": "CAMPUS", "direccion": 1, "paradas": [1, 2, 3]},
+                 {"linea": 1, "codigo": "U1", "color": "#169CD8", "destino": "CAMPUS", "direccion": 1, "paradas": [1, 2]},   # un trozo: no cuenta
+                 {"linea": 2, "codigo": "B1", "color": "#000", "destino": "X", "direccion": 1, "paradas": [1, 3]}]
+
+
+class TestUrbanos(unittest.TestCase):
+    def test_red_por_frecuencia(self):
+        import datetime
+        from asturias.bus import emtusa_horario
+        r = emtusa_horario.como_red(FalsoEmtusa(), datetime.date(2026, 10, 9))         # viernes
+        self.assertEqual(list(r["lineas"]), ["U1"])                                    # sin el búho
+        self.assertTrue(r["lineas"]["U1"]["frecuencia"])
+        self.assertEqual(len(r["variantes"]), 1)                                       # el trozo no cuenta aparte
+        sal = sorted(v[1] for v in r["viajes"])
+        self.assertTrue(all(b - a <= 20.01 for a, b in zip(sal, sal[1:])))             # al menos uno cada 20 min
+        self.assertTrue(sal[0] <= 6 * 60 + 50 and sal[-1] >= 21 * 60)
+        self.assertTrue(r["patrones"][0][0] == 0 and r["patrones"][0][1] > 0)
+        finde = emtusa_horario.como_red(FalsoEmtusa(), datetime.date(2026, 10, 10))
+        self.assertLess(len(finde["viajes"]), len(r["viajes"]))
+        self.assertIsNone(emtusa_horario.como_red(None, datetime.date(2026, 10, 9)))
+
+    def test_el_viaje_usa_el_urbano_en_medio(self):
+        import datetime
+        from asturias.bus import emtusa_horario
+        red = emtusa_horario.como_red(FalsoEmtusa(), datetime.date(2026, 10, 9))
+        g = rutas.Grafo(EST, {"interurbano": red_bus(), "emtusa": red})
+        origen = g.punto_localidad("Villabus")
+        destino = {"lat": 43.5402, "lon": -5.7902, "nombre": "Campus", "tipo": "gps"}      # junto a la parada Campus
+        p = rutas.planificar(g, {"trenes": []}, None, origen, destino, ahora=580, en_vivo=False)
+        self.assertTrue(p["ok"], p)
+        buses = [e for e in p["etapas"] if e["tipo"] == "autobus"]
+        self.assertEqual([b["linea"] for b in buses], ["L1", "U1"])
+        self.assertTrue(buses[1]["frecuencia"] and not buses[0]["frecuencia"])
+
+
 if __name__ == "__main__":
     unittest.main()
