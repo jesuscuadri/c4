@@ -774,6 +774,12 @@ def servir(app, abrir=True, en_red=False, publico=False):
             usar_gz = gz is not None and "gzip" in (self.headers.get("Accept-Encoding") or "")
             if usar_gz:
                 cuerpo = gz
+            try:
+                self._enviar_ya(cuerpo, tipo, codigo, usar_gz)
+            except (BrokenPipeError, ConnectionResetError):
+                pass        # el navegador cerró la conexión a mitad (recarga, cambio de pestaña): no es un error
+
+        def _enviar_ya(self, cuerpo, tipo, codigo, usar_gz):
             self.send_response(codigo)
             self.send_header("Content-Type", tipo)
             if usar_gz:

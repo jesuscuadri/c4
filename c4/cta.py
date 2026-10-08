@@ -301,12 +301,16 @@ def _permisos(grupo, horas, n):
     return [r or 0 for r in rangos]
 
 
+def ruta_cache(red, dia):
+    return os.path.join(CACHE, "cta_%s_%s_v%d.json" % (red, dia.strftime("%Y%m%d"), VERSION_CACHE))
+
+
 def extraer(red, dia, zip_cta=None):
     """La red de un día (ver el formato arriba). Se guarda en caché por día."""
     conf = REDES[red]
     inter = conf.get("tipo") == "interurbano"
     os.makedirs(CACHE, exist_ok=True)
-    cache = os.path.join(CACHE, "cta_%s_%s_v%d.json" % (red, dia.strftime("%Y%m%d"), VERSION_CACHE))
+    cache = ruta_cache(red, dia)
     if zip_cta is None and os.path.exists(cache):
         with open(cache, encoding="utf-8") as f:
             return json.load(f)
