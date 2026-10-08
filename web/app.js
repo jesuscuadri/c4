@@ -242,9 +242,13 @@ function pintarEstado() {
 /* ---------------------------------------------------------------- mi viaje */
 function iniciarSelectores() {
   const opts = (corto) => LINEA.estaciones.map((e) => `<option value="${e.k}">${esc(corto ? nombreCorto(e.nombre) : e.nombre)}</option>`).join("");
-  $("o").innerHTML = $("d").innerHTML = opts(true);
+  // en «Mi viaje» se puede elegir cualquier estación de Asturias: si es de otra línea, se calcula con transbordo
+  const otras = RED.estaciones.filter((e) => !ESTL[e.k]).sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
+  const optsOtras = otras.length ? `<optgroup label="Otras líneas (con transbordo)">` +
+    otras.map((e) => `<option value="${e.k}">${esc(nombreCorto(e.nombre))} · ${esc(e.lineas.join(", "))}</option>`).join("") + `</optgroup>` : "";
+  $("o").innerHTML = $("d").innerHTML = `<optgroup label="${esc(LSEL)} ${esc(infoLinea(LSEL).nombre)}">${opts(true)}</optgroup>` + optsOtras;
   $("est").innerHTML = opts(false);
-  const E = LINEA.estaciones, porId = (id) => (E.find((e) => e.id === id) || {}).k;
+  const E = LINEA.estaciones, porId = (id) => (RED.estaciones.find((e) => e.id === id) || {}).k;
   // Antes (solo C-4) se guardaba el número de orden de la estación en la línea: se pasa a su código
   if (LSEL === "C4" && leerL("o", null) == null && typeof leer("o", null) === "number") {
     const viejo = (i) => (E[i] || {}).id;
@@ -256,6 +260,20 @@ function iniciarSelectores() {
   $("d").value = porId(leerL("d", null)) ?? (ini ? buscar(ini[1]) : E[0].k);
   $("est").value = porId(leerL("est", null)) ?? (ini ? buscar(ini[2]) : E[0].k);
 }
+const mismaLinea = (o, d) => !!(ESTL[o] && ESTL[d]);
+/* Viaje entre estaciones de líneas distintas: se pide al planificador (con transbordos) y se guarda un rato */
+const PLAN_EST = {};
+async function planEntre(o, d) {
+  const c = PLAN_EST[o + "-" + d];
+  if (c && Date.now() - c.ts < 50000) return c.p;
+  if (c && c.pend) return c.pend;
+  const pend = pedir(`/api/ir?origen=${encodeURIComponent(est(o).nombre)}&destino=${encodeURIComponent(est(d).nombre)}`, 16000)
+    .then((p) => { PLAN_EST[o + "-" + d] = { p, ts: Date.now() }; return p; })
+    .catch(() => { delete PLAN_EST[o + "-" + d]; return null; });
+  PLAN_EST[o + "-" + d] = Object.assign(c || {}, { pend });
+  return pend;
+}
+const planGuardado = (o, d) => { const c = PLAN_EST[o + "-" + d]; return c && c.p; };
 function viajesEntre(o, d, lim = 6) {
   const now = ahora(), out = [];
   for (const t of R.trenes) {
@@ -307,8 +325,8 @@ function aviso(txt) {
   clearTimeout(aviso._t); aviso._t = setTimeout(() => { t.hidden = true; }, 2600);
 }
 // si el tren que hará el servicio aún no ha llegado, lo de Renfe «en el andén» no es una posición real
-const fiabilidad = (t) => t.material ? null : ({ "GPS": ["ok", "GPS en directo"], "posición": ["ok", "Posición en directo"], "Renfe": ["ok", "Dato de Renfe"],
-  "posición (aprox.)": ["warn", "Posición aproximada"] }[t.fuente] || null);
+const fiabilidad = (t) => t.material ? null : ({ "GPS": ["ok", "📡 GPS en directo"], "posición": ["ok", "En directo"], "Renfe": ["ok", "Dato de Renfe"],
+  "posición (aprox.)": ["gris", "posición aproximada"] }[t.fuente] || null);
 
 async function pintarManana(o, d) {
   const cont = $("viajes");
@@ -329,6 +347,14 @@ function pintarViaje() {
   const o = +$("o").value, d = +$("d").value;
   pintarFavoritos();
   if (o === d) { $("viajes").innerHTML = `<div class="vacio">Elige dos estaciones distintas.</div>`; return; }
+  if (!mismaLinea(o, d)) {
+    const p = planGuardado(o, d);
+    if (p) pintarPlan(p, $("viajes"));
+    else $("viajes").innerHTML = `<div class="ir-cargando">Calculando el viaje con transbordo…</div>`;
+    planEntre(o, d).then((q) => { if (q && +$("o").value === o && +$("d").value === d && tabActual === "viaje") pintarPlan(q, $("viajes")); });
+    $("bus-enlace").hidden = true;
+    return;
+  }
   const v = viajesEntre(o, d);
   if (!v.length) {
     if (pintarViaje._manana !== `${o}-${d}-${LINEA.fecha}`) { pintarViaje._manana = `${o}-${d}-${LINEA.fecha}`; pintarManana(o, d); }
@@ -365,12 +391,9 @@ function pintarViaje() {
         </div>
         <div class="tv-grande"><div class="h num">${hmS(sal)}</div><div class="l">${cuando}</div><div class="l2">llega <b class="num">${hm(lle)}</b></div></div>
       </div>${casa}
-      <div class="cmp num">
-        <span></span><span class="c">Horario</span><span class="c">App oficial</span><span class="c">Estimado</span>
-        <span class="c" style="align-self:center">Sale</span><span class="${cambiaSal ? "x" : ""}">${hm(t.prog_d[jo])}</span><span>${hm(t.adif_d[jo])}</span><span class="e">${hmS(sal)}</span>
-        <span class="c" style="align-self:center">Llega</span><span class="${cambiaLle ? "x" : ""}">${hm(t.prog_a[jd])}</span><span>${hm(app)}</span><span class="e">${hm(lle)}</span>
-      </div>${aviso}${lis ? `<ul class="motivos">${lis}</ul>` : ""}
-      <div class="tv-acciones"><button type="button" class="btn-mini" data-compartir="${esc(texto)}">Compartir llegada</button><span class="pp-sub">Toca la tarjeta para ver todo el recorrido</span></div></div>`;
+      <div class="tv-hor num">Horario <span class="${cambiaSal ? "x" : ""}">${hm(t.prog_d[jo])}</span> → <span class="${cambiaLle ? "x" : ""}">${hm(t.prog_a[jd])}</span>${t.con_datos && (Math.abs(t.adif_d[jo] - t.prog_d[jo]) >= 1 || Math.abs(app - t.prog_a[jd]) >= 1) ? ` · app oficial ${hm(t.adif_d[jo])} → ${hm(app)}` : ""}</div>
+      ${aviso}${lis ? `<ul class="motivos">${lis}</ul>` : ""}
+      <div class="tv-acciones"><button type="button" class="btn-mini" data-compartir="${esc(texto)}">📤 Compartir llegada</button>${destacado ? `<span class="pp-sub">Toca para ver todo el recorrido</span>` : ""}</div></div>`;
   }).join("");
   pintarBusEnlace(d);
 }
@@ -432,9 +455,9 @@ function pintarEstacion() {
         const mot = t.motivos.find((m) => m.j === j);
         const retr = s - t.prog_d[j];
         return `<tr class="clic${aqui ? " aqui" : ""}" data-tren="${t.id}" data-jo="${j}">
-          <td><span class="e">${hmS(s)}</span>${Math.abs(retr) >= 1 ? `<br><span style="color:var(--mut);text-decoration:line-through">${hm(t.prog_d[j])}</span>` : ""}</td>
+          <td><span class="e">${hmS(s)}</span>${s - now < 60 ? `<div class="cuenta">${s - now < 1 ? "ya" : "en " + Math.floor(s - now) + " min"}</div>` : ""}${Math.abs(retr) >= 1 ? `<br><span style="color:var(--mut);text-decoration:line-through">${hm(t.prog_d[j])}</span>` : ""}</td>
           <td>→ ${esc(destinoCorto(t))} ${numT(t.num)}${aqui ? `<br><span class="tag ok" style="margin:0">En andén${t.via ? " · vía " + esc(t.via) : ""}</span>` : ""}${t.material && j === 0 ? `<br><span style="font-size:12px;color:var(--tx2)">Aún no está: es el tren que llega de ${esc(nombreCorto(t.material.de))} a las ${hm(t.material.llega)}</span>` : ""}</td>
-          <td>${tagEstado(t, j)}${cr ? `<br><span style="font-size:12px;color:var(--tx2)">Cruza aquí con ${elQueVa(cr.ida.id === t.id ? cr.vuelta.id : cr.ida.id)}</span>` : ""}${mot ? `<br><span style="font-size:12px;color:var(--warn)">Espera ${Math.round(mot.min)} min</span>` : ""}</td></tr>`;
+          <td>${tagEstado(t, j)}${mot ? `<br><span style="font-size:12px;color:var(--warn)">Espera ${Math.round(mot.min)} min${cr ? " · cruce con " + elQueVa(cr.ida.id === t.id ? cr.vuelta.id : cr.ida.id) : ""}</span>` : cr && (cr.ida.id === t.id ? cr.ida : cr.vuelta).espera >= 1 ? `<br><span style="font-size:12px;color:var(--tx2)">⇄ cruce aquí</span>` : ""}</td></tr>`;
       }).join("") + `</tbody></table>`;
   };
   // en una cabecera solo se sale hacia un lado: la columna del otro sobra
@@ -544,6 +567,9 @@ function tagEstado(t, j) {
     const r = Math.round(retrasoEn(t, j));
     return `<span class="tag ${r <= 0 ? "gris" : r <= 5 ? "warn" : "bad"}" title="Renfe no da su posición ahora; hace ${t.ultimo_dato} min iba así">${r > 0 ? "+" + r + " min" : "en hora"} · hace ${t.ultimo_dato < 1 ? "<1" : t.ultimo_dato}′</span>`;
   }
+  const rp = Math.round(retrasoEn(t, j));
+  if (rp >= 1 && !(t.tipico >= 1 && Math.abs(rp - t.tipico) < 1))
+    return `<span class="tag ${rp <= 5 ? "warn" : "bad"}" title="Aún sin datos en directo: saldrá tarde porque ${t.material ? "el tren que lo hace llega con retraso" : "tiene que esperar a otro tren (cruce o vía única)"}">+${rp} previsto</span>`;
   if (t.tipico >= 1) return `<span class="tag warn" title="Retraso habitual de este tren, aprendido de días anteriores">suele +${Math.round(t.tipico)}</span>`;
   return `<span class="tag gris" title="Sin datos en directo: hora del horario">Previsto</span>`;
 }
@@ -590,7 +616,7 @@ function pintarLineasMapa() {
       : { radius: 4, color: col, weight: 2.5, fillColor: "#fff", fillOpacity: 1 }).addTo(capaEst);
     m.bindTooltip(esc(nombreCorto(e.nombre)), { permanent: true, direction: "right", offset: [8, 0],
       className: "etq-est" + (grande ? " cruce" : "") });
-    m.bindPopup(() => popupEstacion(e.k), { maxWidth: 300, minWidth: 230, autoPanPaddingTopLeft: [70, 70], autoPanPaddingBottomRight: [20, 20] });
+    m.bindPopup(() => popupEstacion(e.k), { maxWidth: Math.min(300, window.innerWidth - 70), minWidth: Math.min(230, window.innerWidth - 90), autoPanPaddingTopLeft: [70, 70], autoPanPaddingBottomRight: [20, 20] });
     m.on("popupopen", () => { m._abierto = true; }).on("popupclose", () => { m._abierto = false; });
     marcaEst[k] = m;
     etiquetasEst.push([Object.assign({}, e, { cruce: grande }), m]);
@@ -769,15 +795,17 @@ function popupEstacion(k) {
   };
   const enLinea = e.lineas.includes(LSEL);
   // de la línea elegida, por sentidos; de las demás que paran aquí, sus próximas salidas juntas
-  const col = (filtro, tit, color, n) => {
+  const eje = infoLinea(LSEL).eje || [];
+  const col = (filtro, tit, color, n, dir) => {
     const l = salidasEn(F.trenes, k, filtro, n);
+    if (!l.length && dir && (dir < 0 ? eje[0] === k : eje[eje.length - 1] === k)) return "";   // cabecera: solo se sale hacia un lado
     return `<div class="pp-tit"><span class="bola" style="background:${color}"></span>${tit}</div>` +
       (l.length ? `<table class="pp-tabla">${l.map(fila).join("")}</table>` : `<div class="pp-sub" style="padding:4px 0 8px">Sin más salidas hoy</div>`);
   };
   let h = "";
   if (enLinea) {
-    h += col((t) => t.linea === LSEL && t.dir === -1, esc(nombreDir(-1)), "var(--vta)", 3);
-    h += col((t) => t.linea === LSEL && t.dir === 1, esc(nombreDir(1)), "var(--ida)", 3);
+    h += col((t) => t.linea === LSEL && t.dir === -1, esc(nombreDir(-1)), "var(--vta)", 3, -1);
+    h += col((t) => t.linea === LSEL && t.dir === 1, esc(nombreDir(1)), "var(--ida)", 3, 1);
   }
   const otras = e.lineas.filter((l) => l !== LSEL);
   if (otras.length && F.trenes.some((t) => otras.includes(t.linea)))
@@ -1371,16 +1399,18 @@ function cerrarTren() {
 }
 function pintarCajon() {
   if (!cajonTren || !R) return;
-  const t = R.trenes.find((x) => x.id === cajonTren.id);
+  const t = R.trenes.find((x) => x.id === cajonTren.id) || (RT && RT.trenes.find((x) => x.id === cajonTren.id));
   if (!t) return cerrarTren();
   const { jo, jd } = cajonTren;
   const filas = [];
+  let npas = 0;
   for (let j = 0; j < t.k.length; j++) {
     const e = est(t.k[j]);
     const mot = t.motivos.filter((m) => m.j === j);
     const cr = (R.cruces || []).find((c) => c.k === t.k[j] && (c.ida.id === t.id || c.vuelta.id === t.id));
     if (!t.para[j] && !mot.length && !cr) continue;
     const pasado = t.fin || j < t.j0;
+    if (pasado && j !== jo && j !== jd) npas++;
     const salida = j === 0 || (t.parado && j === t.j0 && j < t.k.length - 1);
     const hEst = salida ? t.est_d[j] : t.est_a[j];
     const hProg = salida ? t.prog_d[j] : t.prog_a[j];
@@ -1389,20 +1419,24 @@ function pintarCajon() {
       (cr && !mot.some((m) => m.tipo === "cruce") ? `<div style="font-size:12.5px;color:var(--tx2)">Cruce con ${elQueVa(cr.ida.id === t.id ? cr.vuelta.id : cr.ida.id)}${cr.info === "movido" ? " (trasladado)" : ""}</div>` : "") +
       (!t.para[j] ? `<div style="font-size:12px;color:var(--mut)">sin parada</div>` : "") +
       (j === (t.parado ? t.j0 : proximaJ(t)) && !t.fin ? `<div style="font-size:12.5px;font-weight:700;color:var(--c4)">◀ ${esc(t.situacion)}</div>` : "");
-    filas.push(`<tr class="${pasado ? "pasado" : ""}${j === jo || j === jd ? " aqui" : ""}">
+    const oculto = pasado && !cajonTren.verPasado && j !== jo && j !== jd && !t.fin;
+    filas.push(`<tr class="${pasado ? "pasado" : ""}${j === jo || j === jd ? " aqui" : ""}"${oculto ? " hidden" : ""}>
       <td>${e.cruce ? "<b>" : ""}${esc(e.nombre)}${e.cruce ? "</b>" : ""}${notas}</td>
-      <td>${hm(hProg)}</td><td>${pasado ? "" : hm(hApp)}</td><td class="e">${pasado ? "" : (salida ? hmS(hEst) : hm(hEst))}${!pasado && salida && j > 0 ? `<div class="sub" style="font-weight:400">sale</div>` : ""}</td></tr>`);
+      <td>${hm(hProg)}</td><td class="col-of">${pasado ? "" : hm(hApp)}</td><td class="e">${pasado ? "" : (salida ? hmS(hEst) : hm(hEst))}${!pasado && salida && j > 0 ? `<div class="sub" style="font-weight:400">sale</div>` : ""}</td></tr>`);
   }
   $("cajon").innerHTML = `<div class="cajon-cab"><div><h2>→ ${esc(destinoCorto(t))} ${numT(t.num)}</h2>
       <div style="color:var(--tx2)">${esc(t.origen)} → ${esc(t.destino)}</div></div>
       <button class="cerrar" id="cerrar" aria-label="Cerrar">×</button></div>
     <div class="datos">${chipLinea(t.linea || LSEL)}<span class="tag ${t.dir > 0 ? "ida" : "vta"}" style="margin:0">${esc(t.linea === LSEL ? nombreDir(t.dir) : "→ " + destinoCorto(t))}</span>
       ${(t.con_datos || t.ultimo_dato != null) ? tagEstado(t, Math.min(t.j0, t.k.length - 1)).replace('class="tag', 'style="margin:0" class="tag') : '<span class="tag gris" style="margin:0">Sin datos en tiempo real</span>'}
-      ${t.via ? `<span class="tag gris" style="margin:0">Vía ${esc(t.via)}</span>` : ""}
-      <span class="tag gris" style="margin:0">Fuente: ${esc(t.fuente)}</span></div>
-    <p style="margin:0 0 10px;color:var(--tx2)">${esc(t.situacion)}</p>
-    <table class="tabla num"><thead><tr><th>Estación</th><th>Horario</th><th>App oficial</th><th>Estimado</th></tr></thead><tbody>${filas.join("")}</tbody></table>`;
+      ${t.via ? `<span class="tag gris" style="margin:0">Vía ${esc(t.via)}</span>` : ""}</div>
+    <p style="margin:0 0 10px;color:var(--tx2)" title="Fuente: ${esc(t.fuente)}">${esc(t.situacion)}</p>
+    <div class="cajon-acc"><button type="button" class="btn-mini" id="caj-mapa">🗺️ Ver en el mapa</button>
+      ${npas && !t.fin ? `<button type="button" class="btn-mini" id="caj-pasado">${cajonTren.verPasado ? "Ocultar" : "Ver"} las ${npas} ya pasadas</button>` : ""}</div>
+    <table class="tabla num tabla-caj"><thead><tr><th>Estación</th><th>Horario</th><th class="col-of">App oficial</th><th>Esta app</th></tr></thead><tbody>${filas.join("")}</tbody></table>`;
   $("cerrar").onclick = cerrarTren;
+  $("caj-mapa").onclick = () => { const id = t.id; cerrarTren(); irA("mapa"); setTimeout(() => { seguir = true; seleccionarTren(id); if (marcas[id]) mapa.setView(marcas[id].getLatLng(), Math.max(mapa.getZoom(), 13)); }, 400); };
+  const vp = $("caj-pasado"); if (vp) vp.onclick = () => { cajonTren.verPasado = !cajonTren.verPasado; pintarCajon(); };
 }
 
 /* ---------------------------------------------------------------- navegación */
@@ -1425,39 +1459,61 @@ function pintarInicio() {
   const meta = { directo: ["ok", "En directo"], congelado: ["warn", "Renfe no actualiza"], sin_posiciones: ["warn", "Renfe no da posiciones"], sin_conexion: ["bad", "Sin conexión con Renfe"] };
   const [cls, lbl] = viejo ? ["warn", "Actualizando…"] : (meta[R.calidad] || ["", "En directo"]);
   const prox = (R.cruces || []).find((c) => c.hora >= R.ahora - 1);
-  let h = `<div class="dash">`;
-  h += `<div class="hero hero-${cls}">
-      <div class="hero-top"><span class="pill-linea" style="background:${colorLinea(LSEL)}">${esc(LSEL)}</span>
-        <div><div class="hero-tit">${R.calidad === "directo" && !viejo ? "Línea en directo" : esc(lbl)}</div>
-        <div class="hero-sub">${esc(infoLinea(LSEL).nombre)}${R.actualizado ? " · actualizado " + esc(R.actualizado.slice(0, 5)) : ""}</div></div>
-        <span class="hero-dot"></span></div>
-      <div class="hero-kpis">
-        <div class="hk"><div class="hk-n num">${R.en_circulacion || 0}</div><div class="hk-l">trenes en circulación</div></div>
-        <div class="hk"><div class="hk-n num">${R.con_posicion || 0}</div><div class="hk-l">localizados en vivo</div></div>
-        <div class="hk"><div class="hk-n num">${prox ? hm(prox.hora) : "—"}</div><div class="hk-l">${prox ? "próx. cruce · " + esc(nombreCorto(prox.estacion)) : "sin cruces próximos"}</div></div>
-      </div></div>`;
-  if ((R.tramos_aprendidos || 0) + (R.sesgos_corregidos || 0) + (R.salidas_aprendidas || 0) > 0)
-    h += `<div class="apr-strip" onclick="irA('precision')">🧠 <span>Aprendido: <b>${R.tramos_aprendidos || 0}</b> tramos, <b>${R.salidas_aprendidas || 0}</b> trenes con su retraso habitual y <b>${R.sesgos_corregidos || 0}</b> correcciones por sus fallos</span><span class="cta-fl">›</span></div>`;
-  h += `<div class="dash-cols"><div class="dash-col">`;
-  h += `<button class="cta-ir" onclick="irA('ir')">
-      <div class="cta-ic">🧭</div>
-      <div class="cta-tx"><div class="cta-t">¿A dónde vas?</div><div class="cta-s">Ruta puerta a puerta: bus urbano + tren, con la hora real de llegada</div></div>
-      <span class="cta-fl">→</span></button>`;
-  const o = +$("o").value, d = +$("d").value;
-  h += `<div class="card"><div class="card-cab"><h3>Tu próximo tren</h3><button class="link" onclick="irA('viaje')">Ver todos ›</button></div>`;
+  const o = +$("o").value, d = +$("d").value, now = ahora();
+  let h = `<div class="dash"><div class="dash-cols"><div class="dash-col">`;
+  // 1) lo primero, lo que más se mira: tu próximo tren (con cambio de sentido a un toque)
+  h += `<div class="card card-mio"><div class="card-cab"><h3>Tu próximo tren</h3><button class="link" onclick="irA('viaje')">Ver todos ›</button></div>`;
+  const fs = favoritos().filter((f) => (f.l || "C4") === LSEL);
+  if (fs.length > 1) {
+    const porId = (id) => LINEA.estaciones.find((e) => e.id === id);
+    h += `<div class="favs favs-ini">` + fs.map((f) => {
+      const eo = porId(f.o), ed = porId(f.d);
+      if (!eo || !ed) return "";
+      const act = eo.k === o && ed.k === d;
+      return `<button type="button" class="fav-chip${act ? " act" : ""}" data-ini-ruta="${eo.k}-${ed.k}">${esc(nombreCorto(eo.nombre))} → ${esc(nombreCorto(ed.nombre))}</button>`;
+    }).join("") + `</div>`;
+  }
   if (o === d) h += `<div class="vacio">Elige un trayecto en «Mi viaje».</div>`;
-  else {
-    const v = viajesEntre(o, d, 2), now = ahora();
-    h += `<div class="mini-ruta">${esc(nombreCorto(est(o).nombre))} <span class="mr-fl">→</span> ${esc(nombreCorto(est(d).nombre))}</div>`;
-    h += v.length ? v.map(({ t, jo, jd }) => {
+  else if (!mismaLinea(o, d)) {
+    const p = planGuardado(o, d);
+    h += `<div class="mini-ruta"><span>${esc(nombreCorto(est(o).nombre))} <span class="mr-fl">→</span> ${esc(nombreCorto(est(d).nombre))}</span>
+      <button type="button" class="btn-vuelta" id="ini-vuelta" title="Ver la vuelta" aria-label="Cambiar sentido">⇅ Vuelta</button></div>`;
+    if (!p) { h += `<div class="vacio">Calculando el viaje con transbordo…</div>`; planEntre(o, d).then((q) => { if (q && tabActual === "inicio") pintarInicio(); }); }
+    else if (!p.ok) h += `<div class="vacio">${esc((p.avisos && p.avisos[0]) || p.error || "No hay combinación ahora.")}</div>`;
+    else {
+      const trenes = p.etapas.filter((e) => e.tipo === "tren"), tr = p.etapas.filter((e) => e.tipo === "transbordo");
+      const falta = Math.floor(trenes[0].sale - now);
+      h += `<div class="mini-tren primero" onclick="irA('viaje')">
+        <div class="mt-l"><div class="mt-dest">${trenes.map((e) => chipLinea(e.linea)).join(" › ")}${trenes[0].retraso >= 1 ? `<span class="tag ${trenes[0].retraso <= 5 ? "warn" : "bad"}">+${Math.round(trenes[0].retraso)} min</span>` : ""}</div>
+          <div class="mt-sub">${tr.length ? `cambio en ${tr.map((x) => esc(nombreCorto(x.estacion))).join(" y ")} · ` : ""}llega <b class="num">${esc(p.llega_hm)}</b></div></div>
+        <div class="mt-r"><span class="mt-lle num">${esc(trenes[0].sale_hm)}</span><span class="mt-when${falta <= 3 ? " pronto" : ""}">${falta <= 0 ? "sale ya" : falta < 60 ? "sale en " + falta + " min" : "sale"}</span></div></div>`;
+      for (const a of (p.alternativas || []).slice(0, 1))
+        h += `<div class="mini-tren" onclick="irA('viaje')"><div class="mt-l"><div class="mt-dest">${(a.lineas || []).map(chipLinea).join(" › ")}</div><div class="mt-sub">llega <b class="num">${esc(a.llega_hm)}</b></div></div>
+          <div class="mt-r"><span class="mt-lle num">${esc(a.sale_hm)}</span><span class="mt-when">siguiente</span></div></div>`;
+    }
+  } else {
+    const v = viajesEntre(o, d, 2);
+    h += `<div class="mini-ruta"><span>${esc(nombreCorto(est(o).nombre))} <span class="mr-fl">→</span> ${esc(nombreCorto(est(d).nombre))}</span>
+      <button type="button" class="btn-vuelta" id="ini-vuelta" title="Ver la vuelta" aria-label="Cambiar sentido">⇅ Vuelta</button></div>`;
+    h += v.length ? v.map(({ t, jo, jd }, i) => {
       const sal = t.est_d[jo], lle = t.est_a[jd], falta = Math.floor(sal - now);
-      return `<div class="mini-tren" data-tren="${t.id}" data-jo="${jo}" data-jd="${jd}">
+      return `<div class="mini-tren${i === 0 ? " primero" : ""}" data-tren="${t.id}" data-jo="${jo}" data-jd="${jd}">
         <div class="mt-l"><div class="mt-dest"><span class="bola" style="background:${colorDir(t.dir)}"></span><b>→ ${esc(destinoCorto(t))}</b>${tagEstado(t, jo)}</div>
-          <div class="mt-sub">llega a ${esc(nombreCorto(est(d).nombre))} <b class="num">${hm(lle)}</b></div></div>
-        <div class="mt-r"><span class="mt-lle num">${hmS(sal)}</span><span class="mt-when">${falta <= 0 ? "sale ya" : falta < 60 ? "sale en " + falta + " min" : "sale"}</span></div></div>`;
-    }).join("") : `<div class="vacio">No quedan trenes hoy en este trayecto.</div>`;
+          <div class="mt-sub">llega a ${esc(nombreCorto(est(d).nombre))} <b class="num">${hm(lle)}</b>${t.material && jo === 0 ? ` · el tren aún viene de ${esc(nombreCorto(t.material.de))}` : ""}</div></div>
+        <div class="mt-r"><span class="mt-lle num">${hmS(sal)}</span><span class="mt-when${falta <= 3 ? " pronto" : ""}">${falta <= 0 ? "sale ya" : falta < 60 ? "sale en " + falta + " min" : "sale en " + Math.floor(falta / 60) + " h " + (falta % 60) + " min"}</span></div></div>`;
+    }).join("") : `<div class="vacio">No quedan trenes hoy en este trayecto. <button class="link" onclick="irA('viaje')">Ver los de mañana ›</button></div>`;
   }
   h += `</div>`;
+  // 2) estado de la línea, en una franja
+  h += `<div class="estado-lin estado-${cls}" onclick="irA('mapa')" role="button">
+      <span class="el-dot"></span><b>${R.calidad === "directo" && !viejo ? "En directo" : esc(lbl)}</b>
+      <span class="el-sep">·</span><span>${R.en_circulacion || 0} trenes circulando</span>
+      ${prox ? `<span class="el-sep">·</span><span>próximo cruce <b class="num">${hm(prox.hora)}</b> ${esc(nombreCorto(prox.estacion))}</span>` : ""}
+      <span class="cta-fl">›</span></div>`;
+  h += `<button class="cta-ir" onclick="irA('ir')">
+      <div class="cta-ic">🧭</div>
+      <div class="cta-tx"><div class="cta-t">¿A dónde vas?</div><div class="cta-s">Puerta a puerta, con transbordos y bus urbano</div></div>
+      <span class="cta-fl">→</span></button>`;
   h += `<div class="card"><div class="card-cab"><h3>Cerca de ti</h3></div>
       <button class="btn-grande2" id="inicio-cerca">📍 Estaciones y buses cerca de mí</button>
       <div id="inicio-cerca-res"></div></div>`;
@@ -1471,6 +1527,11 @@ function pintarInicio() {
   h += `</div>`;
   $("inicio").innerHTML = h;
   const b = $("inicio-cerca"); if (b) b.onclick = inicioCerca;
+  const vu = $("ini-vuelta"); if (vu) vu.onclick = () => { $("invertir").onclick(); pintarInicio(); };
+  for (const x of document.querySelectorAll("[data-ini-ruta]")) x.onclick = () => {
+    const [a2, b2] = x.dataset.iniRuta.split("-");
+    $("o").value = a2; $("d").value = b2; guardarL("o", est(+a2).id); guardarL("d", est(+b2).id); pintarInicio();
+  };
 }
 // «Ahora en la línea»: cada tren circulando, dónde está y cómo va
 function tarjetaLinea() {
@@ -1509,11 +1570,15 @@ function inicioCerca() {
   navigator.geolocation.getCurrentPosition(async (pos) => {
     const yo = [pos.coords.latitude, pos.coords.longitude];
     const dk = (e) => Math.hypot((e.lon - yo[1]) * 81, (e.lat - yo[0]) * 111);
-    const e = LINEA.estaciones.reduce((a, x) => dk(x) < dk(a) ? x : a);
-    const sal = proxDesde(e.k, 3);
+    // la estación más cercana de CUALQUIER línea (con las salidas de todas las que paran allí)
+    const e = RED.estaciones.reduce((a, x) => dk(x) < dk(a) ? x : a);
+    const soloEsta = e.lineas.length === 1 && e.lineas[0] === LSEL;
+    if (!soloEsta && !RT) await cargarTodas();
+    const fuente = soloEsta || !RT ? R.trenes : RT.trenes;
+    const sal = salidasEn(fuente, e.k, null, 4);
     const lejos = dk(e) > 1.2;
-    let h = `<div class="cerca-est"><div class="ce-cab">🚉 <b>${esc(e.nombre)}</b> <span class="sub">a ${dk(e) < 1 ? Math.round(dk(e) * 1000) + " m" : dec(dk(e)) + " km"}</span></div>`;
-    h += sal.length ? sal.map((s) => `<div class="ce-fila"><span class="tag ${s.dir > 0 ? "ida" : "vta"}">→ ${esc(nombreCorto(s.destino))}</span><span class="ce-mid">${tagEstado(s.t, s.t.k.indexOf(e.k))}</span><b class="num">${hmS(s.sale)}</b></div>`).join("") : `<div class="vacio">Sin trenes próximos.</div>`;
+    let h = `<div class="cerca-est"><div class="ce-cab">🚉 <b>${esc(e.nombre)}</b> ${e.lineas.map(chipLinea).join(" ")} <span class="sub">a ${dk(e) < 1 ? Math.round(dk(e) * 1000) + " m" : dec(dk(e)) + " km"}</span></div>`;
+    h += sal.length ? sal.map(({ t, j, h: hs }) => `<div class="ce-fila clic" data-tren="${t.id}"><span class="ce-dest">${chipLinea(t.linea)} → ${esc(nombreCorto(t.destino))}</span><span class="ce-mid">${tagEstado(t, j)}</span><b class="num">${hmS(hs)}</b></div>`).join("") : `<div class="vacio">Sin trenes próximos.</div>`;
     if (lejos) h += `<button class="link" id="cerca-ruta" style="margin-top:6px">🧭 Cómo llegar desde aquí a un tren ›</button>`;
     h += `</div>`;
     b.disabled = false; b.textContent = "📍 Actualizar mi posición";
@@ -1571,7 +1636,7 @@ document.addEventListener("click", (ev) => {
     const f = favoritos()[+fav.dataset.fav];
     (async () => {
       if ((f.l || "C4") !== LSEL) await cambiarLinea(f.l || "C4");
-      const eo = LINEA.estaciones.find((e) => e.id === f.o), ed = LINEA.estaciones.find((e) => e.id === f.d);
+      const eo = RED.estaciones.find((e) => e.id === f.o), ed = RED.estaciones.find((e) => e.id === f.d);
       if (eo && ed) { $("o").value = eo.k; $("d").value = ed.k; $("o").onchange(); }
     })();
     return;
@@ -1724,8 +1789,8 @@ function pintarRecientes() {
   };
 }
 
-function pintarPlan(p) {
-  const box = $("ir-resultado");
+function pintarPlan(p, box) {
+  box = box || $("ir-resultado");
   if (!p) { box.innerHTML = ""; return; }
   if (p.cargando) { box.innerHTML = `<div class="ir-cargando">El horario del día aún se está cargando. Prueba en unos segundos.</div>`; return; }
   if (!p.ok) {
@@ -1739,7 +1804,7 @@ function pintarPlan(p) {
     ? `<div class="ir-salir">Sal a las <b class="num">${p.sale_hm || hm(p.sale)}</b> <span>(en ${en} min)</span></div>`
     : `<div class="ir-salir ya">Sal <b>ya</b></div>`;
   let h = `<div class="ir-cab">
-      <div class="ir-od"><span class="ir-de">${esc(p.origen.nombre)}</span><span class="ir-fl">→</span><span class="ir-a">${esc(p.destino.nombre)}</span></div>
+      <div class="ir-od"><span class="ir-de">${esc(p.origen.nombre.replace(/ \((estación|parada)\)$/, ""))}</span><span class="ir-fl">→</span><span class="ir-a">${esc(p.destino.nombre.replace(/ \((estación|parada)\)$/, ""))}</span></div>
       ${salir}
       <div class="ir-tot">Llegas a las <b class="num">${p.llega_hm || "--:--"}</b>${dur ? ` · ${dur}` : ""}</div>
     </div><ol class="ir-etapas">`;

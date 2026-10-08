@@ -551,15 +551,20 @@ async function pintarTrenBus() {
   if (!cont.children.length) cont.innerHTML = `<div class="vacio">Cargando…</div>`;
   let trenHtml = "";
   try {
-    const est = await (await fetch("/api/estado")).json();
-    if (est && est.trenes) {
+    if (!pintarTrenBus.red) pintarTrenBus.red = await (await fetch("/api/red")).json();
+    const red = pintarTrenBus.red;
+    const kg = (red.estaciones || []).findIndex((e) => e.id === "15410" || /^Gij/.test(e.nombre));
+    const est = await (await fetch("/api/estado?lineas=todas")).json();
+    if (est && est.trenes && kg >= 0) {
       const now = est.ahora;
-      const hacia = est.trenes.filter((t) => !t.fin && t.dir < 0 && t.k.includes(0))
-        .map((t) => ({ t, lle: t.est_a[t.k.indexOf(0)] }))
-        .filter((x) => x.lle != null && x.lle > now - 1).sort((a, b) => a.lle - b.lle).slice(0, 3);
-      trenHtml = `<div class="tb-tren"><h3>🚆 Próximas llegadas de la C-4 a Gijón</h3>` +
+      // trenes de cualquier línea (C1, C4, C5…) que llegan a Gijón y aún no han llegado
+      const hacia = est.trenes.filter((t) => !t.fin && !t.cancelado && t.k.indexOf(kg) > Math.max(0, t.j0 - 1) && t.para[t.k.indexOf(kg)])
+        .map((t) => ({ t, lle: t.est_a[t.k.indexOf(kg)] }))
+        .filter((x) => x.lle != null && x.lle > now - 1).sort((a, b) => a.lle - b.lle).slice(0, 5);
+      const chip = (l) => { const x = (red.lineas || {})[l]; return `<span style="background:${x ? x.color : "#888"};color:#fff;font-weight:800;font-size:11px;border-radius:5px;padding:1px 5px">${esc(l)}</span>`; };
+      trenHtml = `<div class="tb-tren"><h3>🚆 Próximos trenes que llegan a Gijón</h3>` +
         (hacia.length ? hacia.map(({ t, lle }) => `<div class="tb-fila"><span class="tb-hora num">${hm(lle)}</span>
-          <span style="flex:1">Tren ${t.num} · desde ${esc(nombreCorto(t.origen))}</span>
+          <span style="flex:1">${chip(t.linea || "C4")} desde ${esc(nombreCorto(t.origen))}</span>
           ${t.retraso >= 1 ? `<span style="color:var(--warn);font-weight:700">+${Math.round(t.retraso)}</span>` : ""}</div>`).join("")
           : `<div class="sub">No quedan trenes hacia Gijón hoy.</div>`) + `</div>`;
     }

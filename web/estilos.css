@@ -507,3 +507,35 @@ h2 .num-t{font-size:13px}
 .tren-m.otra .tm-punto{width:18px;height:18px;left:-9px;top:-9px}
 #m-todas.on{color:var(--c4)}
 .et.transbordo .et-ico{background:var(--warnbg);border-color:color-mix(in srgb,var(--warn) 45%,var(--bd));color:var(--warn);font-weight:800}
+/* ---- revisión de comodidad (07/10) ---- */
+.mini-ruta{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.btn-vuelta{border:1px solid var(--bd2);background:var(--panel2);color:var(--tx);border-radius:99px;padding:5px 11px;font-weight:700;font-size:12.5px;cursor:pointer;flex:0 0 auto}
+.btn-vuelta:active{transform:scale(.96)}
+.mini-tren.primero .mt-lle{font-size:30px}
+.mt-when.pronto{color:var(--c4);font-weight:800}
+.card-mio{border-color:color-mix(in srgb,var(--c4) 40%,var(--bd))}
+.favs-ini{margin:0 0 10px}
+.estado-lin{display:flex;align-items:center;flex-wrap:wrap;gap:4px 6px;border-radius:12px;padding:10px 14px;font-size:13.5px;cursor:pointer;
+  background:var(--okbg);color:var(--ok);border:1px solid color-mix(in srgb,var(--ok) 25%,transparent)}
+.estado-lin span{color:var(--tx2)}.estado-lin b{color:inherit}.estado-lin span b{color:var(--tx)}
+.estado-lin .cta-fl{margin-left:auto;font-size:18px;color:inherit}
+.estado-lin .el-dot{width:8px;height:8px;border-radius:50%;background:currentColor;animation:lat 2s infinite}
+.estado-lin .el-sep{color:var(--mut)}
+.estado-warn{background:var(--warnbg);color:var(--warn);border-color:color-mix(in srgb,var(--warn) 25%,transparent)}
+.estado-bad{background:var(--badbg);color:var(--bad);border-color:color-mix(in srgb,var(--bad) 25%,transparent)}
+.tv-hor{font-size:12.5px;color:var(--mut);margin-top:8px}
+.tv-hor .x{text-decoration:line-through}
+.fia.gris{color:var(--mut);font-weight:500}
+.ce-dest{display:inline-flex;align-items:center;gap:5px;font-weight:600;font-size:13.5px}
+.ce-fila.clic{cursor:pointer}
+@media (max-width:760px){
+  /* el mapa, a toda la pantalla y sin títulos */
+  #tab-mapa .panel{padding:0;border:0;background:none;box-shadow:none}
+  #tab-mapa .panel>h2{display:none}
+  #mapa{height:calc(100dvh - 190px - env(safe-area-inset-bottom));border-radius:14px}
+  #tab-mapa .leyenda{padding:8px 4px}
+}
+.estado-lin .el-dot{background:var(--ok)}.estado-warn .el-dot{background:var(--warn)}.estado-bad .el-dot{background:var(--bad)}
+.cajon-acc{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 10px}
+@media (max-width:480px){.tabla-caj .col-of{display:none}}
+.cuenta{font-size:12px;color:var(--c4);font-weight:700}
