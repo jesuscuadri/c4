@@ -265,8 +265,10 @@ body.mapa-grande #mapa{flex:1;height:auto;border-radius:0;border:0}
 .btn-cta:hover{background:var(--c4d)}
 .btn-cta:disabled{opacity:.6;cursor:default}
 .ir-cuando{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:12px 0 0}
-.ir-cuando label{font-size:12.5px;color:var(--tx2);font-weight:600}
-.ir-cuando select,.ir-cuando input{font-size:15px;padding:8px 10px;border-radius:10px;border:1px solid var(--bd2);background:var(--panel2);color:var(--tx)}
+.ir-cuando label{display:inline;margin:0;font-size:12.5px;color:var(--tx2);font-weight:600}
+.ir-cuando select,.ir-cuando input{width:auto;flex:0 0 auto;display:inline-block;font-size:15px;padding:8px 10px;border-radius:10px;border:1px solid var(--bd2);background-color:var(--panel2);color:var(--tx)}
+.ir-cuando select{padding-right:30px}
+.ir-cuando [hidden]{display:none!important}
 .ir-cuando select:focus,.ir-cuando input:focus{outline:none;border-color:var(--c4)}
 .ir-fav{margin-left:auto;font-size:20px;line-height:1}
 .ir-fav.on{color:#f5b301}
