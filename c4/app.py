@@ -383,6 +383,7 @@ class App:
         segundo plano la primera vez (el fichero del Consorcio pesa ~6 MB)."""
         if not hasattr(self, "_cta"):
             self._cta, self.error_cta, self._cta_en = {}, {}, set()
+            self._cta_lock = threading.Lock()
         hoy = date.today()
         c = self._cta.get(red)
         if c and c[0] == hoy:
@@ -392,7 +393,8 @@ class App:
 
             def preparar():
                 try:
-                    d = cta.extraer(red, hoy)
+                    with self._cta_lock:      # de una en una: cada red recorre el fichero entero
+                        d = cta.extraer(red, hoy)
                     crudo = json.dumps(d, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
                     self._cta[red] = (hoy, (crudo, gzip.compress(crudo, 6)))
                     self.error_cta.pop(red, None)

@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Autobuses del Consorcio de Transportes de Asturias (CTA): urbano de Avilés (y, más adelante,
-TUA de Oviedo e interurbanos), con el horario oficial (GTFS del Consorcio).
+"""Autobuses del Consorcio de Transportes de Asturias (CTA): urbanos de Avilés, Oviedo (TUA) y Mieres
+(y, más adelante, interurbanos), con el horario oficial (GTFS del Consorcio).
 
-El Consorcio no publica tiempo real abierto (su app CTA Conecta sí lo tiene en Avilés, pero no es
-un dato público): las horas son las del horario oficial y la interfaz lo dice claramente.
+Ninguno publica tiempo real abierto (la app CTA Conecta lo tiene en Avilés y la de TUA en Oviedo, pero
+no es un dato público): las horas son las del horario oficial y la interfaz lo dice claramente.
 
 Formato que se manda al navegador (todo el día de una red, unos 25 KB comprimido):
     {"red", "nombre", "fecha", "lineas": {codigo: {codigo, nombre, color}},
@@ -25,12 +25,18 @@ from .util import CACHE, http_get
 
 # Copia pública diaria del GTFS del Consorcio (el original del Punto de Acceso Nacional pide registro)
 CTA_URLS = ["https://files.mobilitydatabase.org/mdb-2827/latest.zip"]
-VERSION_CACHE = 1
+VERSION_CACHE = 2
 
 REDES = {
     "aviles": {"nombre": "Avilés", "agencias": ["28"], "color": "#0b5cab",
                "operador": "Compañía del Tranvía Eléctrico de Avilés"},
+    "oviedo": {"nombre": "Oviedo", "agencias": ["51"], "color": "#c8102e",
+               "operador": "TUA · Transportes Unidos de Asturias"},
+    "mieres": {"nombre": "Mieres", "agencias": ["59"], "color": "#00796b",
+               "operador": "EMUTSA"},
 }
+NOCTURNOS = {"pie": "Búho", "buh": "Búho", "buho": "Búho", "búho": "Búho", "curuxa": "Curuxa"}
+MENORES = {"de", "del", "la", "las", "los", "el", "y", "a", "en"}
 PALETA = ["#e2231a", "#1d70b8", "#00965e", "#f39200", "#7b3f98", "#00a3e0", "#c2185b", "#5d4037",
           "#2e7d32", "#ef6c00", "#455a64", "#6a1b9a", "#00838f", "#ad1457"]
 
@@ -72,7 +78,39 @@ def _hora(s):
 
 def _titulo(s):
     s = s.strip().lower()
-    return re.sub(r"(^|[\s/(\-])(\w)", lambda m: m.group(1) + m.group(2).upper(), s)
+    s = re.sub(r"(^|[\s/(\-])(\w)", lambda m: m.group(1) + m.group(2).upper(), s)
+    # «Mieres Del Camín» -> «Mieres del Camín» (salvo al principio)
+    return re.sub(r"(?<=\s)(\w+)", lambda m: m.group(1).lower() if m.group(1).lower() in MENORES else m.group(1), s)
+
+
+def _bonito(s):
+    """Los textos en mayúsculas («LLAMAQUIQUE»), en minúsculas con mayúscula inicial."""
+    s = (s or "").strip()
+    return _titulo(s) if s and s.upper() == s and any(c.isalpha() for c in s) else s
+
+
+def codigo_linea(r):
+    """Código corto de una línea. El GTFS del Consorcio corta los códigos a 3 caracteres
+    («L1.» por «L1.1», «Mie» por los Curuxa de Mieres, «BUH» por el Búho de Oviedo)."""
+    corto = (r.get("route_short_name") or "").strip() or r.get("route_id", "")
+    largo = (r.get("route_long_name") or "").strip()
+    if "curuxa" in largo.lower():
+        return "Curuxa"
+    m = re.match(r"^(\S+?)(?:\s|-|$)", largo)
+    if m and m.group(1) != corto and m.group(1).startswith(corto.rstrip(".")) and re.search(r"\d", m.group(1)):
+        return m.group(1)
+    return corto
+
+
+def _quita_codigo(texto, cod):
+    """«A1-LLAMAQUIQUE» / «L2 Mieres» / «L1 - La Luz» -> sin el código de delante."""
+    t = (texto or "").strip()
+    t2 = re.sub(r"^\s*L?\w*\d[\w.]*\s*-\s*", "", t)
+    if t2 != t:
+        return t2.strip()
+    if cod and re.match(re.escape(cod) + r"\d*(\s*-\s*|\s+)", t, re.I):
+        return re.sub(re.escape(cod) + r"\d*(\s*-\s*|\s+)", "", t, count=1, flags=re.I).strip()
+    return t
 
 
 def limpia_parada(nombre):
@@ -90,13 +128,14 @@ def limpia_parada(nombre):
     return m.group(2).strip(), loc.strip()
 
 
-def _nombre_linea(nombres):
+def _nombre_linea(nombres, cod=""):
     """Nombre más habitual de una línea, sin el «L1 - » ni los corchetes; las circulares, como tales."""
     c = Counter()
     for n in nombres:
         extra = re.findall(r"\[([^\]]*)\]", n)
-        base = re.sub(r"^\s*L?\w*\d\w*\s*-\s*", "", n)
-        base = re.sub(r"\s*\[[^\]]*\]", "", base).strip()
+        base = _quita_codigo(n, cod)
+        base = re.sub(r"\bB[UÚ]HO\s+", "", base, flags=re.I)
+        base = _bonito(re.sub(r"\s*\[[^\]]*\]", "", base).strip())
         a, _, b = base.partition("-")
         if a.strip() and a.strip() == b.strip():
             base = "Circular " + a.strip() + ("".join(" · " + x for x in extra if x.upper() not in ("CIRCULAR",)) if extra else "")
@@ -170,16 +209,18 @@ def extraer(red, dia, zip_cta=None):
     for p in _csv(z, "stops.txt"):
         if p["stop_id"] in usadas:
             n, loc = limpia_parada(p["stop_name"])
+            if not loc:     # Oviedo y Mieres no ponen la localidad: la calle, que orienta más
+                loc = _bonito(re.sub(r"\s+", " ", p.get("stop_desc") or ""))
             paradas[p["stop_id"]] = [n, loc, round(float(p["stop_lat"]), 6), round(float(p["stop_lon"]), 6)]
     variantes, vidx, patrones, pidx, lista, forma_de = [], {}, [], {}, [], {}
     for tid, filas in horas.items():
         filas.sort()
         t = viajes[tid]
-        cod = rutas[t["route_id"]]["route_short_name"] or rutas[t["route_id"]]["route_id"]
+        cod = codigo_linea(rutas[t["route_id"]])
         seq = tuple(s for _, s, _ in filas)
         clave = (cod, seq)
         if clave not in vidx:
-            dest = re.sub(r"^\s*L?\w*\d\w*\s*-\s*", "", t.get("trip_headsign") or "").strip()
+            dest = _bonito(_quita_codigo(t.get("trip_headsign") or "", cod))
             if not dest or dest.lower() == cod.lower():
                 dest = paradas.get(seq[-1], [""])[0]
             vidx[clave] = len(variantes)
@@ -203,14 +244,14 @@ def extraer(red, dia, zip_cta=None):
                 variantes[i]["forma"] = _simplificar([[la, lo] for _, la, lo in sorted(pts[sid])])
     por_linea = defaultdict(list)
     for r in rutas.values():
-        por_linea[r["route_short_name"] or r["route_id"]].append(r.get("route_long_name", ""))
+        por_linea[codigo_linea(r)].append(r.get("route_long_name", ""))
     codigos = sorted({v["linea"] for v in variantes}, key=_orden)
     lineas = {}
     for i, c in enumerate(codigos):
-        r0 = next((r for r in rutas.values() if (r["route_short_name"] or r["route_id"]) == c), {})
+        r0 = next((r for r in rutas.values() if codigo_linea(r) == c), {})
         col = r0.get("route_color")
-        lineas[c] = {"codigo": "Búho" if c.lower() in ("pie", "buho", "búho") else c,
-                     "nombre": _nombre_linea(por_linea[c]),
+        lineas[c] = {"codigo": NOCTURNOS.get(c.lower(), c),
+                     "nombre": _nombre_linea(por_linea[c], c),
                      "color": ("#" + col) if col and len(col) == 6 else PALETA[i % len(PALETA)]}
     datos = {"red": red, "nombre": conf["nombre"], "operador": conf.get("operador", ""), "color": conf["color"],
              "fecha": dia.isoformat(), "lineas": lineas, "paradas": paradas,

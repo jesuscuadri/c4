@@ -75,5 +75,35 @@ class TestExtraer(unittest.TestCase):
         self.assertTrue(d["lineas"]["L1"]["color"].startswith("#"))
 
 
+DATOS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "datos")
+
+
+class TestOviedo(unittest.TestCase):
+    """Muestra real del GTFS del Consorcio (TUA, líneas A y C, 08/10/2026)."""
+
+    def test_nombres_en_limpio(self):
+        d = cta.extraer("oviedo", date(2026, 10, 8), zip_cta=os.path.join(DATOS, "cta_oviedo_muestra.zip"))
+        self.assertEqual(d["lineas"]["A"]["nombre"], "Centro Asturiano – Llamaquique")
+        self.assertEqual(d["lineas"]["C"]["nombre"], "Facultades – Lugones")
+        destinos = {(v["linea"], v["destino"]) for v in d["variantes"]}
+        self.assertIn(("A", "Llamaquique"), destinos)
+        self.assertIn(("C", "Lugones"), destinos)
+        self.assertNotIn("BUH", d["lineas"])                       # el Búho no sale los jueves
+        self.assertEqual(d["paradas"]["2051"][:2], ["Oviedo 41 Avda", "Avda. de Oviedo"])   # la calle
+        self.assertEqual(len(d["viajes"]), 24)
+
+
+class TestCodigos(unittest.TestCase):
+    def test_codigos_recortados_del_consorcio(self):
+        self.assertEqual(cta.codigo_linea({"route_short_name": "L1.", "route_long_name": "L1.1 San Andrés-La Hueria"}), "L1.1")
+        self.assertEqual(cta.codigo_linea({"route_short_name": "Mie", "route_long_name": "Mieres-San Andrés [Curuxa]"}), "Curuxa")
+        self.assertEqual(cta.codigo_linea({"route_short_name": "L2 ", "route_long_name": "L2 Mieres-Cenera"}), "L2")
+        self.assertEqual(cta.codigo_linea({"route_short_name": "BUH", "route_long_name": "BUHO SAN CLAUDIO-BUHO CUATRO CAÑOS"}), "BUH")
+        self.assertEqual(cta._nombre_linea(["BUHO SAN CLAUDIO-BUHO CUATRO CAÑOS"], "BUH"), "San Claudio – Cuatro Caños")
+        self.assertEqual(cta._bonito(cta._quita_codigo("L2 Mieres", "L2")), "Mieres")
+        self.assertEqual(cta._bonito(cta._quita_codigo("A2-CENTRO ASTURIANO", "A")), "Centro Asturiano")
+        self.assertEqual(cta._titulo("MIERES DEL CAMÍN"), "Mieres del Camín")
+
+
 if __name__ == "__main__":
     unittest.main()

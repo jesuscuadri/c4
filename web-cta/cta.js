@@ -1,5 +1,5 @@
 "use strict";
-/* Autobuses del Consorcio de Transportes de Asturias (de momento, urbano de Avilés), con el horario
+/* Autobuses del Consorcio de Transportes de Asturias (urbanos de Avilés, Oviedo y Mieres), con el horario
    oficial. El Consorcio no publica dónde va cada autobús: las horas son las del horario y la posición
    de los buses en el mapa es la que les toca según el horario (y así se dice). */
 
