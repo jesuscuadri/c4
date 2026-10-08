@@ -83,6 +83,20 @@ class TestRutas(unittest.TestCase):
         self.assertFalse(plan["ok"])
         self.assertIn("no quedan", plan["error"])
 
+    def test_primero_de_manana(self):
+        origen = self.g.punto_localidad("Villabus")
+        destino = {"lat": 43.5005, "lon": -5.5505, "nombre": "Casa", "tipo": "gps"}
+        plan = rutas.planificar(self.g, {"trenes": []}, None, origen, destino, ahora=1300)
+        self.assertTrue(plan.get("sin_servicio_hoy"))
+        horario = {"viajes": {"X1": [["A", 0, 700], ["B", 730, 730]]}, "lineas": {"X1": "C1"}}
+        trenes = rutas.trenes_de_horario(EST, horario)
+        self.assertEqual(len(trenes), 1)
+        p = rutas.primero_manana(EST, {"interurbano": red_bus()}, trenes, origen, destino)
+        self.assertIsNotNone(p)
+        self.assertEqual(p["sale_hm"], "10:00")
+        self.assertEqual(p["llega_hm"], "12:10")
+        self.assertIsNone(rutas.primero_manana(EST, {}, [], origen, destino))
+
     def test_nombres_que_se_confunden(self):
         d = red_bus()
         d["paradas"].update({"M1": ["A", "Mieres", 43.40, -5.77], "M2": ["B", "Mieres del Camín", 43.25, -5.77],

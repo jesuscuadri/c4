@@ -384,6 +384,7 @@ class App:
         segundo plano la primera vez (el fichero del Consorcio pesa ~6 MB)."""
         if not hasattr(self, "_cta"):
             self._cta, self.error_cta, self._cta_en, self._cta_formas, self._cta_datos = {}, {}, set(), {}, {}
+            self._cta_manana = {}
             self._cta_lock = threading.Lock()
         dia = date.today() + timedelta(days=1 if manana else 0)
         clave = red + "+1" if manana else red
@@ -413,6 +414,8 @@ class App:
                     self._cta[clave] = (dia, (crudo, gzip.compress(crudo, 6)))
                     if not manana:
                         self._cta_datos[red] = (dia, d)
+                    else:
+                        self._cta_manana[red] = (dia, d)
                     self.error_cta.pop(clave, None)
                     print("Bus %s: %d líneas · %d paradas · %d viajes hoy" % (
                         d["nombre"], len(d["lineas"]), len(d["paradas"]), len(d["viajes"])))
@@ -681,6 +684,25 @@ class App:
             return planificador.geocodificar(texto, linea, self.bus, grafo=self.grafo_rutas())
         return None
 
+    def _anadir_manana(self, plan, origen, destino):
+        """Si hoy ya no queda nada, cuándo sale mañana el primero (trenes de Cercanías + autobuses)."""
+        try:
+            manana = date.today() + timedelta(days=1)
+            for red, c in consorcio.REDES.items():
+                self.red_cta(red, True)       # por si aún no estaba preparado
+            redes = {r: d for r, (dia, d) in list(getattr(self, "_cta_manana", {}).items()) if dia == manana}
+            if self._manana[0] != manana:
+                self._manana = (manana, gtfs.extraer_red(self.cfg, manana))
+            with self.lock:
+                est = self.estaciones_plan
+            trenes = rutas.trenes_de_horario(est, self._manana[1])
+            p = rutas.primero_manana(est, redes, trenes, origen, destino)
+            if p:
+                plan["manana"] = p
+                plan["error"] += " Mañana el primero sale a las %s y llega a las %s." % (p["sale_hm"], p["llega_hm"])
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
+
     def ir(self, origen, destino, solo_tren=False):
         if not origen:
             return {"ok": False, "error": "Falta el origen.", "cual": "origen"}
@@ -693,7 +715,10 @@ class App:
         try:
             g = None if solo_tren else self.grafo_rutas()
             if g is not None:
-                return rutas.planificar(g, res, self.bus, origen, destino, ahora_min())
+                plan = rutas.planificar(g, res, self.bus, origen, destino, ahora_min())
+                if plan.get("sin_servicio_hoy"):
+                    self._anadir_manana(plan, origen, destino)
+                return plan
             return planificador.planificar(linea, res, self.bus, origen, destino, ahora_min())
         except Exception as e:  # noqa: BLE001
             traceback.print_exc()

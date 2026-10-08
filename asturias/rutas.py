@@ -265,7 +265,7 @@ def _trenes(res):
     return out
 
 
-def raptor(g, trenes, listo, llegadas, ahora, max_veh=MAX_VEHICULOS):
+def raptor(g, trenes, listo, llegadas, ahora, max_veh=MAX_VEHICULOS, horizonte=HORIZONTE):
     """listo: {nodo: hora a la que se está allí}; llegadas: {nodo: minutos de allí al destino}.
     Devuelve el mejor viaje como lista de tramos, o None."""
     INF = 1e18
@@ -313,7 +313,7 @@ def raptor(g, trenes, listo, llegadas, ahora, max_veh=MAX_VEHICULOS):
             for sal, off in ruta["viajes"]:
                 for base in (0, -1440):
                     t0 = sal + base
-                    if t0 + off[-1] < ahora or t0 + off[0] > ahora + HORIZONTE:
+                    if t0 + off[-1] < ahora or t0 + off[0] > ahora + horizonte:
                         continue
                     for i in range(i0, n - 1):
                         nodo = ns[i]
@@ -481,7 +481,7 @@ def _resumen_alt(g, w, acc, llegadas):
             "retraso": ret, "con_datos": cd}
 
 
-def planificar(g, res, bus, origen, destino, ahora, en_vivo=True):
+def planificar(g, res, bus, origen, destino, ahora, en_vivo=True, horizonte=HORIZONTE):
     """Plan para salir ahora entre dos puntos (ya geocodificados), con trenes y autobuses."""
     est = g.est
     plan = {"origen": origen, "destino": destino, "ahora": round(ahora, 2), "hora_ahora": hm(ahora),
@@ -503,12 +503,13 @@ def planificar(g, res, bus, origen, destino, ahora, en_vivo=True):
     listo = {i: ahora + t + (P.MARGEN_ENLACE if et else 0.0) for i, (et, t) in acc.items()}
     llegadas = {i: t for i, (et, t) in sal.items()}
     trenes = _trenes(res)
-    v = raptor(g, trenes, listo, llegadas, ahora)
+    v = raptor(g, trenes, listo, llegadas, ahora, horizonte=horizonte)
     if v is None:
         if dist_od <= 4000:
             return P._plan_sin_tren(bus, origen, destino, ahora, en_vivo, plan)
         plan["error"] = "Hoy ya no quedan trenes ni autobuses que te lleven de %s a %s." % (
             _corto(origen["nombre"]), _corto(destino["nombre"]))
+        plan["sin_servicio_hoy"] = True
         return plan
     sale = _montar(g, plan, v, acc, sal, ahora, est)
     # si andando se llega antes que con todo esto (sitios cercanos), mejor andar
@@ -525,7 +526,7 @@ def planificar(g, res, bus, origen, destino, ahora, en_vivo=True):
         if len(alt) == 2:
             break
         listo2 = {k: max(h, desde + 0.5) for k, h in listo.items()}
-        w = raptor(g, trenes, listo2, llegadas, ahora)
+        w = raptor(g, trenes, listo2, llegadas, ahora, horizonte=horizonte)
         if w is None:
             break
         p1 = next(x for x in w["tramos"] if not x.get("pie"))
@@ -539,6 +540,40 @@ def planificar(g, res, bus, origen, destino, ahora, en_vivo=True):
         alt.append(_resumen_alt(g, w, acc, llegadas))
     plan["alternativas"] = alt
     return plan
+
+
+def trenes_de_horario(est, datos):
+    """Convierte el horario de un día (gtfs.extraer_red) en trenes con el formato del cálculo."""
+    pos = {e: k for k, e in enumerate(est.est)}
+    out = []
+    for tid, filas in (datos or {}).get("viajes", {}).items():
+        k, d, a = [], [], []
+        for s, llega, sale in filas:
+            if s in pos:
+                k.append(pos[s])
+                a.append(llega)
+                d.append(sale)
+        if len(k) < 2:
+            continue
+        n = len(k)
+        out.append({"id": tid, "num": tid, "linea": (datos.get("lineas") or {}).get(tid, ""), "destino": "",
+                    "k": k, "j0": 0, "para": [True] * n, "est_d": d, "est_a": a, "fin": False,
+                    "cancelado": False, "retraso": 0, "con_datos": False, "motivos": [], "via": None})
+    return out
+
+
+def primero_manana(est, redes_manana, trenes_manana, origen, destino):
+    """El primer viaje de mañana (desde las 0:00) entre dos puntos, o None. Sin datos en vivo."""
+    if not redes_manana and not trenes_manana:
+        return None
+    g = Grafo(est, redes_manana)
+    plan = planificar(g, {"trenes": trenes_manana}, None, origen, destino, 0.0, en_vivo=False,
+                    horizonte=24 * 60)
+    if not plan.get("ok") or not plan.get("etapas"):
+        return None
+    primero = next((e for e in plan["etapas"] if e.get("sale_hm") and e["tipo"] in ("tren", "autobus", "bus")), None)
+    return {"sale_hm": primero["sale_hm"] if primero else plan["sale_hm"], "llega_hm": plan["llega_hm"], "duracion": plan.get("duracion"),
+            "transbordos": plan.get("transbordos", 0)}
 
 
 def _clave(x):
