@@ -229,6 +229,11 @@ class Grafo:
 
 
 # ---------------------------------------------------------------------- el cálculo
+def _nombre_nodo(nd):
+    """Cómo se llama un nodo al andar hacia él: las estaciones de tren, con «Estación de» delante."""
+    return "Estación de " + nd[2] if nd[0] == "T" else nd[2]
+
+
 def _accesos(g, punto, bus, en_vivo, ida):
     """Cómo se llega del punto (origen) a cada nodo, o de cada nodo al punto (destino).
     Devuelve {nodo: (etapas, minutos)}."""
@@ -248,7 +253,8 @@ def _accesos(g, punto, bus, en_vivo, ida):
         if m <= 90:
             out[i] = ([], 0.0)
         else:
-            de, a = (punto["nombre"], nd[2]) if ida else (nd[2], punto["nombre"])
+            nom = _nombre_nodo(nd)
+            de, a = (punto["nombre"], nom) if ida else (nom, punto["nombre"])
             out[i] = ([{"tipo": "andar", "desde": de, "hasta": a, "metros": round(m * DESVIO_ANDAR),
                         "min": round(w, 1)}], w)
     # a las estaciones de tren, en Gijón, también en el bus urbano (EMTUSA, en directo)
@@ -425,7 +431,7 @@ def _montar(g, plan, v, acc, sal, ahora, est):
     for x in v["tramos"]:
         if x.get("pie"):
             a, b = g.nodos[x["de"]], g.nodos[x["a"]]
-            etapas.append({"tipo": "andar", "desde": a[2], "hasta": b[2],
+            etapas.append({"tipo": "andar", "desde": _nombre_nodo(a), "hasta": _nombre_nodo(b),
                            "metros": round(distancia_km((a[3], a[4]), (b[3], b[4])) * 1000 * DESVIO_ANDAR),
                            "min": round(x["min"], 1), "transbordo": True})
             previo = (previo or 0) + x["min"]
@@ -563,7 +569,7 @@ def trenes_de_horario(est, datos):
         if len(k) < 2:
             continue
         n = len(k)
-        out.append({"id": tid, "num": tid, "linea": (datos.get("lineas") or {}).get(tid, ""), "destino": "",
+        out.append({"id": tid, "num": tid, "linea": (datos.get("lineas") or {}).get(tid, ""), "destino": est.nombre[k[-1]],
                     "k": k, "j0": 0, "para": [True] * n, "est_d": d, "est_a": a, "fin": False,
                     "cancelado": False, "retraso": 0, "con_datos": False, "motivos": [], "via": None})
     return out
