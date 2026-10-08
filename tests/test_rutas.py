@@ -83,6 +83,16 @@ class TestRutas(unittest.TestCase):
         self.assertFalse(plan["ok"])
         self.assertIn("no quedan", plan["error"])
 
+    def test_nombres_que_se_confunden(self):
+        d = red_bus()
+        d["paradas"].update({"M1": ["A", "Mieres", 43.40, -5.77], "M2": ["B", "Mieres del Camín", 43.25, -5.77],
+                             "M3": ["C", "Mieres del Camín", 43.251, -5.771]})
+        d["paradas"].update({"P%d" % i: ["X", "Pola de Siero", 43.39, -5.66] for i in range(9)})
+        g = rutas.Grafo(EST, {"interurbano": d})
+        self.assertEqual(g.buscar_localidad("Mieres")["nombre"], "Mieres del Camín")
+        self.assertIn("Mieres (cerca de Pola de Siero)", g.localidades)
+        self.assertEqual(g.sugerir("mier")[0]["nombre"], "Mieres del Camín")
+
     def test_cambio_andando(self):
         # S3 y la estación A están a unos 150 m: se puede cambiar andando
         i3, ia = self.g.idx[("S", "S3")], self.g.idx[("T", 0)]

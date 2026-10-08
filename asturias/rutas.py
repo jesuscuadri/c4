@@ -87,6 +87,36 @@ class Grafo:
         for i, n in enumerate(self.nodos):
             if n[0] == "S" and n[5]:
                 self.localidades.setdefault(n[5], []).append(i)
+        self._aclarar_nombres()
+
+    def _aclarar_nombres(self):
+        """Si un pueblo se llama como el principio de otro más grande («Mieres», una aldea de Siero,
+        frente a «Mieres del Camín»), el pequeño pasa a llamarse «Mieres (cerca de Pola de Siero)»
+        para no confundirlos, y al buscar «Mieres» sale el grande."""
+        self.grande_de = {}           # nombre corto -> el pueblo grande que empieza así
+        nombres = list(self.localidades)
+        nn = {loc: normaliza(loc) for loc in nombres}
+        for loc in nombres:
+            mayores = [m for m in nombres if m != loc and nn[m].startswith(nn[loc] + " ")
+                       and len(self.localidades[m]) >= len(self.localidades[loc])]
+            if not mayores:
+                continue
+            grande = max(mayores, key=lambda m: len(self.localidades[m]))
+            ns = self.localidades[loc]
+            lat = sum(self.nodos[i][3] for i in ns) / len(ns)
+            lon = sum(self.nodos[i][4] for i in ns) / len(ns)
+            otros = [(distancia_km((lat, lon), self._centro(m)), m) for m in nombres
+                     if m not in (loc, grande) and len(self.localidades[m]) >= 8]
+            ref = min(otros)[1] if otros else None
+            nuevo = "%s (cerca de %s)" % (loc, ref) if ref else "%s (pueblo pequeño)" % loc
+            self.localidades[nuevo] = self.localidades.pop(loc)
+            self.grande_de[nn[loc]] = grande
+            if loc in self.alias:
+                self.alias[nuevo] = self.alias[loc]
+
+    def _centro(self, loc):
+        ns = self.localidades[loc]
+        return (sum(self.nodos[i][3] for i in ns) / len(ns), sum(self.nodos[i][4] for i in ns) / len(ns))
 
     def _nodo(self, tipo, ref, nombre, lat, lon, loc):
         self.idx[(tipo, ref)] = len(self.nodos)
@@ -123,6 +153,8 @@ class Grafo:
         n = normaliza(texto)
         if not n:
             return None
+        if n in self.grande_de:                 # «Mieres» es Mieres del Camín
+            return self.punto_localidad(self.grande_de[n])
         nombres = list(self.localidades)
         claves = {loc: normaliza(loc + " " + self.alias.get(loc, "")) for loc in nombres}
         for cond in (lambda loc: normaliza(loc) == n or normaliza(self.alias.get(loc, "")) == n,
