@@ -1832,12 +1832,23 @@ function pintarPlan(p, box) {
   if (!p.ok) {
     box.innerHTML = `<div class="ir-error">${esc(p.error || "No encontré una ruta.")}${p.cual ? " Prueba con el nombre de una estación, una parada o un sitio conocido, o elige una de las sugerencias." : ""}</div>` +
       (p.avisos || []).map((a) => `<div class="ir-aviso">${esc(a)}</div>`).join("");
+    if (p.manana && p.manana.plan) {
+      const caja = document.createElement("div");
+      caja.className = "ir-manana";
+      pintarPlan(p.manana.plan, caja);
+      box.insertAdjacentHTML("beforeend", `<div class="ir-manana-t">Para mañana, esto es lo que tienes que coger</div>`);
+      box.appendChild(caja);
+    }
     return;
   }
   const dur = p.duracion != null ? `${Math.round(p.duracion)} min de viaje` : "";
   const en = p.sale_en != null ? Math.round(p.sale_en) : 0;
   const enParada = p.origen && p.origen.tipo === "localidad" && p.etapas.length && p.etapas[0].tipo === "autobus";
-  const salir = p.solo_urbano ? "" : enParada
+  const salir = p.es_manana
+    ? (enParada
+      ? `<div class="ir-salir">Mañana, estate en <b>${esc(p.etapas[0].subir)}</b> a las <b class="num">${p.sale_hm}</b></div>`
+      : `<div class="ir-salir">Mañana, sal a las <b class="num">${p.sale_hm}</b></div>`)
+    : p.solo_urbano ? "" : enParada
     ? `<div class="ir-salir">Estate en <b>${esc(p.etapas[0].subir)}</b> a las <b class="num">${p.sale_hm || hm(p.sale)}</b> <span>(${en >= 1 ? "en " + en + " min" : "ya"})</span></div>`
     : en >= 1
     ? `<div class="ir-salir">Sal a las <b class="num">${p.sale_hm || hm(p.sale)}</b> <span>(en ${en} min)</span></div>`
@@ -1880,10 +1891,11 @@ function pintarPlan(p, box) {
   }
   h += `</ol>`;
   if (p.alternativas && p.alternativas.length)
-    h += `<div class="ir-alt"><div class="ir-alt-t">Si no te da tiempo</div>` + p.alternativas.map((a) =>
+    h += `<div class="ir-alt"><div class="ir-alt-t">${p.es_manana ? "Los siguientes" : "Si no te da tiempo"}</div>` + p.alternativas.map((a) =>
       `<div class="ir-alt-f num"><span>${a.vehiculos ? a.vehiculos.map((v) => v.tipo === "bus" ? `<span class="bus-chip" style="background:${esc(v.color)}">${esc(v.linea)}</span>` : chipLinea(v.linea)).join(" ") : (a.lineas || []).map(chipLinea).join(" ")} <b>${a.sale_hm}</b>${a.desde && a.desde !== p.estacion_sub ? ` desde ${esc(nombreCorto(a.desde))}` : ""}${a.retraso >= 1 && a.con_datos ? ` <span class="tag warn" style="margin:0">+${Math.round(a.retraso)}</span>` : ""}</span>
         <span>${a.salir_hm ? `sal ${a.salir_hm} · ` : ""}llegas <b>${a.llega_hm}</b></span></div>`).join("") + `</div>`;
   (p.avisos || []).forEach((a) => { h += `<div class="ir-aviso">${esc(a)}</div>`; });
+  if (p.es_manana) { box.innerHTML = h + `<p class="ir-nota">Horario oficial de mañana, sin tiempo real: los trenes y autobuses pueden variar. Recuerda mirarlo otra vez mañana.</p>`; return; }
   h += `<p class="ir-nota">${p.transbordos ? "Los transbordos se cuentan con la hora REAL a la que llega cada tren (mínimo 3 min para cambiar de tren y 2 para coger un autobús). " : ""}El tren lleva la hora real (con cruces en vía única) y la ruta se recalcula sola cada minuto mientras la miras. ${p.con_bus ? "Los autobuses del Consorcio van con su horario oficial. " : ""}El bus urbano de Gijón usa los minutos en directo de EMTUSA cuando los hay.</p>`;
   box.innerHTML = h;
 }

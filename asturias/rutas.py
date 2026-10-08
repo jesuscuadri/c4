@@ -588,8 +588,9 @@ def primero_manana(g, trenes_manana, origen, destino):
     if not plan.get("ok") or not plan.get("etapas"):
         return None
     primero = next((e for e in plan["etapas"] if e.get("sale_hm") and e["tipo"] in ("tren", "autobus", "bus")), None)
+    plan["es_manana"] = True
     return {"sale_hm": primero["sale_hm"] if primero else plan["sale_hm"], "llega_hm": plan["llega_hm"],
-            "duracion": plan.get("duracion"), "transbordos": plan.get("transbordos", 0)}
+            "duracion": plan.get("duracion"), "transbordos": plan.get("transbordos", 0), "plan": plan}
 
 
 def _clave(x):

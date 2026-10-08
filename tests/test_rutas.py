@@ -95,6 +95,8 @@ class TestRutas(unittest.TestCase):
         self.assertIsNotNone(p)
         self.assertEqual(p["sale_hm"], "10:00")
         self.assertEqual(p["llega_hm"], "12:10")
+        self.assertTrue(p["plan"]["es_manana"])
+        self.assertTrue(any(e["tipo"] == "autobus" for e in p["plan"]["etapas"]))
         # el pueblo trae nodos de OTRO grafo (más paradas antes): no debe romperse
         origen2 = dict(origen, nodos=[999, 1000])
         self.assertIsNotNone(rutas.primero_manana(rutas.Grafo(EST, {"interurbano": red_bus()}), trenes, origen2, destino))

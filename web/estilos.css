@@ -270,6 +270,8 @@ body.mapa-grande #mapa{flex:1;height:auto;border-radius:0;border:0}
 #ir-resultado{margin-top:16px}
 .ir-cargando,.ir-vacio{color:var(--tx2);padding:14px;text-align:center;background:var(--panel2);border-radius:12px}
 .ir-error{background:var(--badbg);color:var(--bad);padding:12px 14px;border-radius:12px;font-weight:600}
+.ir-manana-t{margin:18px 2px 8px;font-size:14px;font-weight:700;color:var(--tx)}
+.ir-manana{border-top:2px solid var(--c4,#e83e9c);padding-top:4px}
 .ir-aviso{background:var(--warnbg);color:var(--warn);padding:10px 13px;border-radius:10px;font-size:13.5px;margin-top:10px}
 .ir-cab{display:flex;flex-direction:column;gap:6px;padding:2px 2px 14px;border-bottom:1px solid var(--bd);margin-bottom:6px}
 .ir-salir{font-size:22px;font-weight:800;letter-spacing:-.3px}
