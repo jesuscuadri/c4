@@ -395,7 +395,13 @@ class App:
             def preparar():
                 try:
                     with self._cta_lock:      # de una en una: cada red recorre el fichero entero
+                        local = cta.ruta_cache(red, dia)
+                        nuevo = not os.path.exists(local)
+                        if nuevo and self._bajar_horario(local):
+                            nuevo = False
                         d = cta.extraer(red, dia)
+                    if nuevo:
+                        threading.Thread(target=self._subir_horario, args=(local,), daemon=True).start()
                     if manana:
                         d = dict(d, variantes=[dict(v, forma=None) for v in d["variantes"]])   # los recorridos solo de hoy
                     elif cta.REDES[red].get("formas_aparte"):
@@ -416,6 +422,35 @@ class App:
                     self._cta_en.discard(clave)
             threading.Thread(target=preparar, daemon=True).start()
         return c[1] if c else None    # mientras, el de ayer si lo hay
+
+    def _bajar_horario(self, local):
+        """Si otro arranque ya procesó este horario, se recupera de GitHub (segundos, en vez de un minuto)."""
+        try:
+            crudo = self.almacen.bajar_archivo("horarios/" + os.path.basename(local) + ".gz")
+            if not crudo:
+                return False
+            datos = gzip.decompress(crudo)
+            json.loads(datos.decode("utf-8"))            # que esté entero
+            os.makedirs(os.path.dirname(local), exist_ok=True)
+            with open(local, "wb") as f:
+                f.write(datos)
+            print("Horario recuperado de GitHub:", os.path.basename(local))
+            return True
+        except Exception as e:  # noqa: BLE001
+            print("Aviso: horario de GitHub no válido (%s)" % e)
+            return False
+
+    def _subir_horario(self, local):
+        try:
+            with open(local, "rb") as f:
+                datos = gzip.compress(f.read(), 9)
+            hoy = date.today()
+            conservar = {"horarios/" + os.path.basename(cta.ruta_cache(r, d)) + ".gz"
+                         for r in cta.REDES for d in (hoy, hoy + timedelta(days=1))}
+            self.almacen.subir_archivo("horarios/" + os.path.basename(local) + ".gz", datos,
+                                       borrar_prefijo="horarios", conservar=conservar)
+        except Exception as e:  # noqa: BLE001
+            print("Aviso: no se pudo guardar el horario en GitHub:", e)
 
     def _lineas_de_aviso(self, a):
         """A qué líneas afecta un aviso de Renfe (por sus rutas o sus estaciones)."""
