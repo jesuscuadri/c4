@@ -59,7 +59,7 @@ def imprimir_consulta(app, origen, destino):
 def main():
     for flujo in (sys.stdout, sys.stderr):  # la consola de Windows no siempre es UTF-8
         try:
-            flujo.reconfigure(encoding="utf-8", errors="replace")
+            flujo.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)   # línea a línea: así salen al momento en los logs de Render
         except Exception:  # noqa: BLE001
             pass
     ap = argparse.ArgumentParser(description="Llegada real C-4 Asturias con cruces en vía única")
