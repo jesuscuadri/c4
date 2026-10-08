@@ -276,7 +276,7 @@ async function planEntre(o, d) {
   const c = PLAN_EST[o + "-" + d];
   if (c && Date.now() - c.ts < 50000) return c.p;
   if (c && c.pend) return c.pend;
-  const pend = pedir(`/api/ir?origen=${encodeURIComponent(est(o).nombre)}&destino=${encodeURIComponent(est(d).nombre)}`, 16000)
+  const pend = pedir(`/api/ir?origen=${encodeURIComponent(est(o).nombre)}&destino=${encodeURIComponent(est(d).nombre)}&solo_tren=1`, 16000)
     .then((p) => { PLAN_EST[o + "-" + d] = { p, ts: Date.now() }; return p; })
     .catch(() => { delete PLAN_EST[o + "-" + d]; return null; });
   PLAN_EST[o + "-" + d] = Object.assign(c || {}, { pend });
@@ -1769,7 +1769,7 @@ function prepararSugerencias(inp, pref) {
     cerrar();
     if (pref === "o") $("ir-d").focus(); else planificar();
   };
-  const ico = { lugar: "📍", estacion: "🚆", parada: "🚌" };
+  const ico = { lugar: "📍", estacion: "🚆", parada: "🚌", localidad: "🏘️" };
   inp.addEventListener("input", () => {
     ELEGIDO[pref] = null;
     clearTimeout(timer);
@@ -1813,7 +1813,7 @@ function guardarReciente(o, d) {
 function pintarRecientes() {
   const r = leer("ir.recientes", []);
   const cont = $("ir-ejemplos");
-  const lista = r.length ? r : [{ o: "EPI Gijón", d: "Candás" }, { o: "Hospital de Cabueñes", d: "Xivares" }, { o: "Candás", d: "Oviedo" }];
+  const lista = r.length ? r : [{ o: "EPI Gijón", d: "Candás" }, { o: "Cangas de Onís", d: "Gijón" }, { o: "Candás", d: "Oviedo" }];
   const corto = (x) => x === MI_UBIC ? "📍 Aquí" : x.replace(/ \((estación|parada de bus)\)$/, "").split(" · ")[0];
   cont.innerHTML = (r.length ? `<span class="ir-ej-t">Recientes</span>` : `<span class="ir-ej-t">Ejemplos</span>`) +
     lista.map((x, i) => `<button type="button" data-i="${i}">${esc(corto(x.o))} → ${esc(corto(x.d))}</button>`).join("");
@@ -1836,7 +1836,10 @@ function pintarPlan(p, box) {
   }
   const dur = p.duracion != null ? `${Math.round(p.duracion)} min de viaje` : "";
   const en = p.sale_en != null ? Math.round(p.sale_en) : 0;
-  const salir = p.solo_urbano ? "" : en >= 1
+  const enParada = p.origen && p.origen.tipo === "localidad" && p.etapas.length && p.etapas[0].tipo === "autobus";
+  const salir = p.solo_urbano ? "" : enParada
+    ? `<div class="ir-salir">Estate en <b>${esc(p.etapas[0].subir)}</b> a las <b class="num">${p.sale_hm || hm(p.sale)}</b> <span>(${en >= 1 ? "en " + en + " min" : "ya"})</span></div>`
+    : en >= 1
     ? `<div class="ir-salir">Sal a las <b class="num">${p.sale_hm || hm(p.sale)}</b> <span>(en ${en} min)</span></div>`
     : `<div class="ir-salir ya">Sal <b>ya</b></div>`;
   let h = `<div class="ir-cab">
@@ -1856,6 +1859,12 @@ function pintarPlan(p, box) {
       h += `<li class="et bus"><span class="et-ico">🚌</span><div class="et-cuerpo">
         <div class="et-t"><span class="bus-chip" style="background:${esc(e.color)}">${esc(e.linea)}</span> hacia ${esc(e.destino)} ${sale}</div>
         <div class="et-sub">Sube en <b>${esc(e.subir)}</b> · baja en <b>${esc(e.bajar)}</b> · ${e.paradas} paradas (~${Math.round(e.min)} min)</div></div></li>`;
+    } else if (e.tipo === "autobus") {
+      const lugar = (n, loc) => esc(n) + (loc && !n.toLowerCase().includes(loc.toLowerCase()) ? ` <span class="et-sub2">· ${esc(loc)}</span>` : "");
+      h += `<li class="et bus"><span class="et-ico">🚌</span><div class="et-cuerpo">
+        <div class="et-t"><span class="bus-chip" style="background:${esc(e.color)}">${esc(e.linea)}</span> hacia ${esc(e.destino)} <span class="et-min aprox">horario</span></div>
+        <div class="et-horas num"><span>${esc(e.sale_hm)} <b>${lugar(e.subir, e.subir_loc)}</b></span><span class="et-fl">→</span><span>${esc(e.llega_hm)} <b>${lugar(e.bajar, e.bajar_loc)}</b></span></div>
+        <div class="et-sub">${e.nombre_linea ? esc(e.nombre_linea) + " · " : ""}${e.operador ? esc(e.operador) + " · " : ""}${e.paradas} ${e.paradas === 1 ? "parada" : "paradas"}${e.espera >= 3 ? ` · esperas ${Math.round(e.espera)} min` : ""}</div></div></li>`;
     } else if (e.tipo === "transbordo") {
       h += `<li class="et transbordo"><span class="et-ico">⇄</span><div class="et-cuerpo">
         <div class="et-t">Transbordo en ${esc(nombreCorto(e.estacion))} a la ${chipLinea(e.linea)}</div>
@@ -1872,10 +1881,10 @@ function pintarPlan(p, box) {
   h += `</ol>`;
   if (p.alternativas && p.alternativas.length)
     h += `<div class="ir-alt"><div class="ir-alt-t">Si no te da tiempo</div>` + p.alternativas.map((a) =>
-      `<div class="ir-alt-f num"><span>${(a.lineas || []).map(chipLinea).join(" ")} <b>${a.sale_hm}</b>${a.desde && a.desde !== p.estacion_sub ? ` desde ${esc(nombreCorto(a.desde))}` : ""}${a.retraso >= 1 && a.con_datos ? ` <span class="tag warn" style="margin:0">+${Math.round(a.retraso)}</span>` : ""}</span>
+      `<div class="ir-alt-f num"><span>${a.vehiculos ? a.vehiculos.map((v) => v.tipo === "bus" ? `<span class="bus-chip" style="background:${esc(v.color)}">${esc(v.linea)}</span>` : chipLinea(v.linea)).join(" ") : (a.lineas || []).map(chipLinea).join(" ")} <b>${a.sale_hm}</b>${a.desde && a.desde !== p.estacion_sub ? ` desde ${esc(nombreCorto(a.desde))}` : ""}${a.retraso >= 1 && a.con_datos ? ` <span class="tag warn" style="margin:0">+${Math.round(a.retraso)}</span>` : ""}</span>
         <span>${a.salir_hm ? `sal ${a.salir_hm} · ` : ""}llegas <b>${a.llega_hm}</b></span></div>`).join("") + `</div>`;
   (p.avisos || []).forEach((a) => { h += `<div class="ir-aviso">${esc(a)}</div>`; });
-  h += `<p class="ir-nota">${p.transbordos ? "Los transbordos se cuentan con la hora REAL a la que llega el primer tren (mínimo 3 min para cambiar). " : ""}El tren lleva la hora real (con cruces en vía única) y la ruta se recalcula sola cada minuto mientras la miras. El bus urbano usa los minutos en directo de EMTUSA cuando los hay.</p>`;
+  h += `<p class="ir-nota">${p.transbordos ? "Los transbordos se cuentan con la hora REAL a la que llega cada tren (mínimo 3 min para cambiar de tren y 2 para coger un autobús). " : ""}El tren lleva la hora real (con cruces en vía única) y la ruta se recalcula sola cada minuto mientras la miras. ${p.con_bus ? "Los autobuses del Consorcio van con su horario oficial. " : ""}El bus urbano de Gijón usa los minutos en directo de EMTUSA cuando los hay.</p>`;
   box.innerHTML = h;
 }
 

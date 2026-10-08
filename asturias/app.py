@@ -16,6 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .trenes import gtfs
 from .trenes import planificador
+from . import rutas
 from .bus import consorcio
 from .trenes.estimador import Estimador
 from .trenes.historial import (Precision, aprender_calibracion, correccion, aprender_paradas, aprender_salidas, aprender_sesgos, aprender_tiempos,
@@ -637,14 +638,39 @@ class App:
                 "paradas": [{"estacion": nom.get(s, s), "min": m}
                             for s, m in sorted(par_d.items(), key=lambda kv: -kv[1])[:12]]}
 
+    def grafo_rutas(self):
+        """El grafo de trenes + autobuses del día (None si aún no están los horarios de los autobuses)."""
+        with self.lock:
+            est = self.estaciones_plan
+        datos = getattr(self, "_cta_datos", {})
+        hoy = date.today()
+        redes = {r: d for r, (dia, d) in list(datos.items()) if dia == hoy}
+        if est is None or not redes:
+            return None
+        if not hasattr(self, "_rutas"):
+            self._rutas = rutas.Cache()
+        try:
+            return self._rutas.obtener(est, redes)
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
+            return None
+
+    def sugerir(self, q):
+        with self.lock:
+            linea = self.estaciones_plan
+        return planificador.sugerir(q, linea, self.bus, grafo=self.grafo_rutas())
+
     def geocode(self, q):
         with self.lock:
             linea = self.estaciones_plan
-        p = planificador.geocodificar(q, linea, self.bus)
+        p = planificador.geocodificar(q, linea, self.bus, grafo=self.grafo_rutas())
         return p or {"error": "No encontré «%s». Prueba con el nombre de una parada, una estación o un sitio." % q}
 
     def resolver(self, texto, lat, lon, nombre):
         if lat and lon:
+            g = self.grafo_rutas() if nombre else None
+            if g is not None and nombre in g.localidades:      # un pueblo elegido de las sugerencias
+                return g.punto_localidad(nombre)
             try:
                 return {"lat": float(lat), "lon": float(lon), "nombre": nombre or "Tu ubicación", "tipo": "gps"}
             except ValueError:
@@ -652,10 +678,10 @@ class App:
         if texto:
             with self.lock:
                 linea = self.estaciones_plan
-            return planificador.geocodificar(texto, linea, self.bus)
+            return planificador.geocodificar(texto, linea, self.bus, grafo=self.grafo_rutas())
         return None
 
-    def ir(self, origen, destino):
+    def ir(self, origen, destino, solo_tren=False):
         if not origen:
             return {"ok": False, "error": "Falta el origen.", "cual": "origen"}
         if not destino:
@@ -665,6 +691,9 @@ class App:
         if linea is None or res is None:
             return {"ok": False, "cargando": True}
         try:
+            g = None if solo_tren else self.grafo_rutas()
+            if g is not None:
+                return rutas.planificar(g, res, self.bus, origen, destino, ahora_min())
             return planificador.planificar(linea, res, self.bus, origen, destino, ahora_min())
         except Exception as e:  # noqa: BLE001
             traceback.print_exc()
@@ -925,9 +954,7 @@ def servir(app, abrir=True, en_red=False, publico=False):
                 return self._json(app.bus.llegadas(ruta.rsplit("/", 1)[-1]))
             if ruta == "/api/sugerir":
                 q = parse_qs(urlparse(self.path).query)
-                with app.lock:
-                    linea = getattr(app, "estaciones_plan", None)
-                return self._json({"sugerencias": planificador.sugerir(q.get("q", [""])[0], linea, app.bus)})
+                return self._json({"sugerencias": app.sugerir(q.get("q", [""])[0])})
             if ruta == "/api/geocode":
                 q = parse_qs(urlparse(self.path).query)
                 return self._json(app.geocode(q.get("q", [""])[0]))
@@ -940,7 +967,7 @@ def servir(app, abrir=True, en_red=False, publico=False):
                     return self._json({"ok": False, "error": "No encontré el origen «%s»." % g("origen"), "cual": "origen"})
                 if g("destino") and not destino:
                     return self._json({"ok": False, "error": "No encontré el destino «%s»." % g("destino"), "cual": "destino"})
-                return self._json(app.ir(origen, destino))
+                return self._json(app.ir(origen, destino, solo_tren=g("solo_tren") == "1"))
             if ruta == "/api/manana":
                 q = parse_qs(urlparse(self.path).query)
                 try:

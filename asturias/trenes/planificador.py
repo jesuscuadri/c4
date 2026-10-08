@@ -58,10 +58,11 @@ LUGARES = {
 }
 
 
-def geocodificar(texto, linea, bus, con_internet=True):
+def geocodificar(texto, linea, bus, con_internet=True, grafo=None):
     """Convierte un texto libre en un punto {lat, lon, nombre, tipo}.
 
-    Orden: sitios conocidos → estación del tren → parada de bus → Nominatim (OSM)."""
+    Orden: sitios conocidos → estación del tren → pueblo o ciudad (paradas del Consorcio) →
+    parada de bus de Gijón → parada del Consorcio → Nominatim (OSM)."""
     if texto is None:
         return None
     texto = texto.strip()
@@ -87,15 +88,25 @@ def geocodificar(texto, linea, bus, con_internet=True):
         except KeyError:
             pass
 
-    # 3) parada de autobús por nombre
+    # 3) pueblo o ciudad (todas sus paradas del Consorcio)
+    if grafo is not None:
+        p = grafo.buscar_localidad(texto)
+        if p:
+            return p
+
+    # 4) parada de autobús por nombre: Gijón y, si no, del Consorcio
     if bus is not None and bus.red_ok:
         ps = bus.buscar_paradas(texto, limite=1)
         if ps:
             p = ps[0]
             return {"lat": p["lat"], "lon": p["lon"], "nombre": p["nombre"] + " (parada)",
                     "tipo": "parada", "parada": p["id"]}
+    if grafo is not None:
+        p = grafo.buscar_parada(texto)
+        if p:
+            return p
 
-    # 4) Nominatim (solo si el servidor tiene internet)
+    # 5) Nominatim (solo si el servidor tiene internet)
     if con_internet:
         p = _nominatim(texto)
         if p:
@@ -115,8 +126,8 @@ def _lugar_en(n):
     return mejor
 
 
-def sugerir(texto, linea, bus, limite=8):
-    """Sugerencias mientras se escribe: sitios conocidos, estaciones de la C-4 y paradas de bus."""
+def sugerir(texto, linea, bus, limite=8, grafo=None):
+    """Sugerencias mientras se escribe: sitios conocidos, estaciones, pueblos y paradas de bus."""
     n = normaliza(texto or "")
     if len(n) < 2:
         return []
@@ -139,12 +150,19 @@ def sugerir(texto, linea, bus, limite=8):
                 ests.append((not nn.startswith(n), len(nn), k))
         for _, _, k in sorted(ests):
             poner(linea.nombre[k] + " (estación)", "estacion", linea.coord[k][0], linea.coord[k][1], linea.nombre[k])
+    cta = grafo.sugerir(texto, limite) if grafo is not None else []
+    for x in cta:
+        if x["tipo"] == "localidad":
+            poner(x["nombre"], "localidad", x["lat"], x["lon"], x["texto"])
     if bus is not None and getattr(bus, "red_ok", False):
         for p in bus.buscar_paradas(texto, limite=30):
             pn = " " + normaliza(p["nombre"]).replace("(", " ")
             if (" " + n) not in pn:
                 continue                    # solo si alguna palabra empieza así («can» no es «Vaticano»)
             poner(p["nombre"] + " (parada de bus)", "parada", p["lat"], p["lon"], p["nombre"])
+    for x in cta:
+        if x["tipo"] == "parada":
+            poner(x["nombre"], "parada", x["lat"], x["lon"], x["texto"])
     return out[:limite]
 
 
