@@ -1,5 +1,5 @@
-:root{--ac:#0b5cab;--ac2:#084a8a}
-@media (prefers-color-scheme:dark){:root{--ac:#5aa2ff;--ac2:#5aa2ff}}
+:root{--ac:var(--ac-red,#0b5cab);--ac2:var(--ac-red,#084a8a)}
+@media (prefers-color-scheme:dark){:root{--ac:color-mix(in srgb,var(--ac-red,#0b5cab) 55%,#fff);--ac2:var(--ac)}}
 .txt-l{display:inline}
 @media (max-width:600px){.txt-l{display:none}.marca small{display:none}}
 .lg-prog{background:var(--ac)!important;opacity:.85}
@@ -15,3 +15,38 @@
 .var-sel button{border:1px solid var(--bd2);background:var(--panel2);color:var(--tx);border-radius:99px;padding:5px 11px;font-weight:600;font-size:13px;cursor:pointer}
 .var-sel button.on{background:var(--tx);color:var(--panel);border-color:var(--tx)}
 .prox-lin{font-size:13px;color:var(--tx2);margin:6px 0 2px}
+
+/* interurbanos: viaje entre dos sitios */
+.iv-campos{display:flex;gap:8px;align-items:center}
+.iv-cols{flex:1;display:grid;gap:8px;min-width:0}
+.iv-cambiar{flex:0 0 auto;width:42px;height:42px;border-radius:50%;border:1px solid var(--bd2);background:var(--panel2);color:var(--tx);font-size:19px;cursor:pointer;margin-top:18px}
+.iv-sug{border:1px solid var(--bd2);border-radius:12px;background:var(--panel);margin-top:8px;overflow:hidden;box-shadow:var(--sombra)}
+.iv-sug button{display:flex;width:100%;gap:10px;align-items:baseline;text-align:left;border:0;border-bottom:1px solid var(--bd);background:none;color:var(--tx);padding:10px 12px;font-size:15px;cursor:pointer}
+.iv-sug button:last-child{border-bottom:0}
+.iv-sug button:hover,.iv-sug button:focus{background:var(--panel2)}
+.iv-sug .s-ic{flex:0 0 auto;width:20px;text-align:center}
+.iv-sug .s-n{flex:1;min-width:0}
+.iv-sug small{color:var(--mut);font-size:12.5px;margin-left:4px}
+.iv-yo{margin-top:10px;border:1px dashed var(--bd2);background:none;color:var(--tx2);border-radius:10px;padding:8px 12px;font-weight:600;font-size:13.5px;cursor:pointer;width:100%}
+.iv-res-cab{display:flex;justify-content:space-between;gap:8px;align-items:baseline;margin:16px 0 4px;font-size:13px;color:var(--tx2)}
+.iv-viaje{display:grid;grid-template-columns:1fr auto;gap:3px 10px;width:100%;text-align:left;border:1px solid var(--bd);border-radius:12px;padding:11px 13px;margin-top:8px;background:var(--panel2);color:var(--tx);cursor:pointer;font:inherit}
+.iv-viaje.pasado{opacity:.55}
+.iv-h{font-size:18px;font-variant-numeric:tabular-nums}
+.iv-h b{font-size:20px}
+.iv-h i{font-style:normal;color:var(--mut);margin:0 4px}
+.iv-en{font-weight:800;color:var(--ac);text-align:right;white-space:nowrap}
+.iv-lin{grid-column:1/-1;display:flex;gap:7px;align-items:center;font-size:13.5px;min-width:0}
+.iv-lin span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.iv-par{grid-column:1/-1;color:var(--mut);font-size:12.5px}
+.iv-dur{color:var(--mut);font-size:13px;font-weight:500}
+.iv-mas{margin-top:10px;width:100%;border:1px solid var(--bd2);background:var(--panel2);color:var(--tx);border-radius:10px;padding:9px;font-weight:700;cursor:pointer}
+.lp.fuera{opacity:.45}
+.lp.tramo .lp-n{font-weight:700}
+.lp.sube .lp-h::before{content:"Sube ";font-weight:600;color:var(--mut);font-size:12px}
+.lp.baja .lp-h::before{content:"Baja ";font-weight:600;color:var(--mut);font-size:12px}
+.lin-buscar{margin-bottom:12px}
+.op-tit{font-size:12px;text-transform:uppercase;letter-spacing:.4px;color:var(--mut);font-weight:700;margin:16px 0 6px}
+.op-tit:first-child{margin-top:0}
+.linea-desc small{display:block;color:var(--mut);font-size:11.5px}
+.lleg .destino small.via{display:block}
+.via-l{color:var(--mut);font-size:12.5px;font-weight:500}

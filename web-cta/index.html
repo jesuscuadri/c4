@@ -27,6 +27,7 @@
     </div>
   </div>
   <nav class="tabs" role="tablist">
+    <button role="tab" data-tab="viaje" id="tab-btn-viaje" hidden><svg class="ico" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="M8.5 6H15a3 3 0 0 1 0 6H9a3 3 0 0 0 0 6h6.5"/></svg><span>Viaje</span></button>
     <button role="tab" data-tab="mapa" aria-selected="true"><svg class="ico" viewBox="0 0 24 24"><path d="M9 4 3.5 6v14L9 18l6 2 5.5-2V4L15 6 9 4zM9 4v14M15 6v14"/></svg><span>Mapa</span></button>
     <button role="tab" data-tab="cerca"><svg class="ico" viewBox="0 0 24 24"><path d="M12 21s-7-6.5-7-11a7 7 0 0 1 14 0c0 4.5-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/></svg><span>Cerca</span></button>
     <button role="tab" data-tab="buscar"><svg class="ico" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.5-4.5"/></svg><span>Buscar</span></button>
@@ -37,6 +38,22 @@
 
 <main>
   <div id="avisos"></div>
+  <section id="tab-viaje" hidden>
+    <div class="panel">
+      <h2>¿A dónde vas?</h2>
+      <p class="sub">Autobuses de hoy entre dos pueblos, ciudades o paradas, según el horario oficial.</p>
+      <div class="iv-campos">
+        <div class="iv-cols">
+          <label class="campo"><span>Desde</span><input id="iv-de" type="search" placeholder="Pueblo, ciudad o parada" autocomplete="off" enterkeyhint="next"></label>
+          <label class="campo"><span>Hasta</span><input id="iv-a" type="search" placeholder="Pueblo, ciudad o parada" autocomplete="off" enterkeyhint="search"></label>
+        </div>
+        <button type="button" class="iv-cambiar" id="iv-cambiar" title="Cambiar origen y destino" aria-label="Cambiar origen y destino">⇅</button>
+      </div>
+      <div id="iv-sug" class="iv-sug" hidden></div>
+      <button type="button" class="iv-yo" id="iv-yo">📍 Salir desde donde estoy</button>
+      <div id="iv-res"></div>
+    </div>
+  </section>
   <section id="tab-mapa">
     <div class="panel panel-mapa">
       <div class="mapa-barra">
@@ -72,6 +89,8 @@
     <div class="panel">
       <h2 id="lineas-tit">Líneas</h2>
       <p class="sub">Toca una línea para ver su recorrido, sus paradas y cuándo pasa.</p>
+      <label class="campo lin-buscar" id="lin-buscar" hidden><span>Buscar línea</span>
+        <input id="lin-q" type="search" placeholder="Pueblo o ciudad (p. ej. Cangas, Llanes)" autocomplete="off"></label>
       <div id="lineas-lista" class="lineas-grid"></div>
     </div>
   </section>

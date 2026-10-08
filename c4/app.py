@@ -382,7 +382,7 @@ class App:
         """Horario de hoy de una red de bus del Consorcio, ya en JSON (y comprimido). Se prepara en
         segundo plano la primera vez (el fichero del Consorcio pesa ~6 MB)."""
         if not hasattr(self, "_cta"):
-            self._cta, self.error_cta, self._cta_en = {}, {}, set()
+            self._cta, self.error_cta, self._cta_en, self._cta_formas = {}, {}, set(), {}
             self._cta_lock = threading.Lock()
         hoy = date.today()
         c = self._cta.get(red)
@@ -395,6 +395,10 @@ class App:
                 try:
                     with self._cta_lock:      # de una en una: cada red recorre el fichero entero
                         d = cta.extraer(red, hoy)
+                    if cta.REDES[red].get("formas_aparte"):
+                        # los recorridos dibujados pesan mucho: se piden por línea al abrirla en el mapa
+                        self._cta_formas[red] = {i: (v["linea"], v["forma"]) for i, v in enumerate(d["variantes"]) if v.get("forma")}
+                        d = dict(d, variantes=[dict(v, forma=None) for v in d["variantes"]])
                     crudo = json.dumps(d, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
                     self._cta[red] = (hoy, (crudo, gzip.compress(crudo, 6)))
                     self.error_cta.pop(red, None)
@@ -777,7 +781,8 @@ def servir(app, abrir=True, en_red=False, publico=False):
             if ruta == "/api/ping":
                 return self._json({"ok": True, "hora": datetime.now().strftime("%H:%M:%S")})
             if ruta == "/api/cta/redes":
-                return self._json({"redes": [{"id": k, "nombre": v["nombre"], "color": v["color"]} for k, v in cta.REDES.items()]})
+                return self._json({"redes": [{"id": k, "nombre": v["nombre"], "color": v["color"], "tipo": v.get("tipo", "urbano")}
+                                             for k, v in cta.REDES.items()]})
             if ruta == "/api/cta/red":
                 q = parse_qs(urlparse(self.path).query)
                 red = q.get("red", ["aviles"])[0]
@@ -787,6 +792,11 @@ def servir(app, abrir=True, en_red=False, publico=False):
                 if c is None:
                     return self._json({"cargando": True, "error": app.error_cta.get(red)})
                 return self._enviar(c[0], "application/json; charset=utf-8", gz=c[1])
+            if ruta == "/api/cta/formas":
+                q = parse_qs(urlparse(self.path).query)
+                red, lin = q.get("red", [""])[0], q.get("linea", [""])[0]
+                fs = getattr(app, "_cta_formas", {}).get(red, {})
+                return self._json({"formas": {i: f for i, (l, f) in fs.items() if l == lin}})
             if ruta == "/cta" or ruta == "/cta/":
                 ruta = "/cta/index.html"
             if ruta == "/api/bus/red":

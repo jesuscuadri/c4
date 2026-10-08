@@ -25,7 +25,7 @@ from .util import CACHE, http_get
 
 # Copia pública diaria del GTFS del Consorcio (el original del Punto de Acceso Nacional pide registro)
 CTA_URLS = ["https://files.mobilitydatabase.org/mdb-2827/latest.zip"]
-VERSION_CACHE = 2
+VERSION_CACHE = 4
 
 REDES = {
     "aviles": {"nombre": "Avilés", "agencias": ["28"], "color": "#0b5cab",
@@ -34,7 +34,13 @@ REDES = {
                "operador": "TUA · Transportes Unidos de Asturias"},
     "mieres": {"nombre": "Mieres", "agencias": ["59"], "color": "#00796b",
                "operador": "EMUTSA"},
+    # todo lo demás del Consorcio: ALSA y las demás empresas entre pueblos y ciudades
+    "interurbano": {"nombre": "Asturias", "titulo": "Interurbanos de Asturias", "excluir": ["28", "51", "59"],
+                    "color": "#6d28d9", "operador": "Consorcio de Transportes de Asturias",
+                    "tipo": "interurbano", "formas_aparte": True, "tolerancia_km": 0.02},
 }
+OPERADORES = {"19": "ALSA", "31": "Sama·Mariano", "774": "La Fresneda", "53": "Zapico", "24": "Autos Sama",
+              "9": "Asturiana", "10": "A. Langreo", "56": "Villa", "50": "Bimenes", "82": "Casablanca"}
 NOCTURNOS = {"pie": "Búho", "buh": "Búho", "buho": "Búho", "búho": "Búho", "curuxa": "Curuxa"}
 MENORES = {"de", "del", "la", "las", "los", "el", "y", "a", "en"}
 PALETA = ["#e2231a", "#1d70b8", "#00965e", "#f39200", "#7b3f98", "#00a3e0", "#c2185b", "#5d4037",
@@ -113,18 +119,44 @@ def _quita_codigo(texto, cod):
     return t
 
 
+def _asturianez(t):
+    """Cuánto «suena» a la forma asturiana un topónimo (para enseñar la castellana, que es la que
+    busca casi todo el mundo, y dejar la otra para la búsqueda)."""
+    t = t.upper()
+    palabras = re.findall(r"[\wÁÉÍÓÚÜÑ']+", t)
+    return (2 * ("X" in t) + sum(1 for w in palabras if w.startswith("LL")) + sum(1 for w in palabras if w.endswith("U"))
+            + sum(1 for w in palabras if w in ("LES", "L'", "ELS")) + ("L'" in t) + ("CUA" in t))
+
+
+def _localidad(loc):
+    """«OVIEDO/UVIÉU» -> («Oviedo», «Uviéu»); «LLANGRÉU/LANGREO» -> («Langreo», «Llangréu»);
+    «PIEDRASBLANCAS|Piedras Blancas» -> («Piedras Blancas», «»); «PEÑA, LA» -> («La Peña», «»)."""
+    def bonito(x):
+        partes = [p.strip() for p in x.split(",")]
+        return (_titulo(" ".join(reversed(partes))) if len(partes) > 1 else _titulo(x)).replace("' ", "'")
+    if "|" in loc:
+        return loc.split("|", 1)[1].strip(), ""
+    partes = [x.strip() for x in loc.split("/") if x.strip()]
+    if len(partes) < 2:
+        return bonito(loc).strip(), ""
+    a, b = partes[0], partes[1]
+    if _asturianez(b) < _asturianez(a):
+        a, b = b, a
+    return bonito(a), bonito(b)
+
+
+ALIAS = {}      # localidad -> su otro nombre (se rellena al leer las paradas)
+
+
 def limpia_parada(nombre):
     """«[AVILÉS]  Cristalería [CTA 04317]» -> («Cristalería», «Avilés»);
     «[PIEDRASBLANCAS|Piedras Blancas]  Eysines [CTA 03075]» -> («Eysines», «Piedras Blancas»)."""
     m = re.match(r"^\[([^\]]*)\]\s*(.*?)\s*(\[CTA[^\]]*\])?\s*$", nombre or "")
     if not m:
         return (nombre or "").strip(), ""
-    loc = m.group(1)
-    if "|" in loc:
-        loc = loc.split("|", 1)[1]
-    else:
-        partes = [p.strip() for p in loc.split(",")]
-        loc = _titulo(" ".join(reversed(partes))) if len(partes) > 1 else _titulo(loc)
+    loc, otro = _localidad(m.group(1))
+    if otro:
+        ALIAS[loc] = otro
     return m.group(2).strip(), loc.strip()
 
 
@@ -175,9 +207,74 @@ def _simplificar(pts, tol_km=0.008):
     return [[round(p[0], 5), round(p[1], 5)] for p, kk in zip(pts, keep) if kk]
 
 
+def _operador_corto(aid, nombre):
+    if aid in OPERADORES:
+        return OPERADORES[aid]
+    n = re.sub(r",?\s+(S\.?L\.?U?|S\.?A\.?U?|SLU|SAU|UTE|S\.?L\.?L\.?)\.?$", "", (nombre or "").strip(), flags=re.I)
+    n = re.sub(r"^(Autos|Autobuses( de)?|Autocares( de)?|Automóviles|Transportes|Empresa|Compañía|Viajes)\s+", "", n, flags=re.I)
+    n = n.strip() or aid
+    return n if len(n) <= 12 else n.split()[0][:12]
+
+
+def _via(largo):
+    """«Gijón-Oviedo [GO2] [Campus del Cristo] [Consejerías]» -> «GO2 · Campus del Cristo · Consejerías»."""
+    return " · ".join(x.strip() for x in re.findall(r"\[([^\]]*)\]", largo or "") if x.strip())
+
+
+def _localidades_cercanas(paradas, max_km=3.0):
+    """Las paradas sin localidad (las de TUA, por ejemplo) toman la de la parada con localidad más cercana."""
+    import math
+    celda = 0.03
+    rejilla = defaultdict(list)
+    for pid, p in paradas.items():
+        if p[1]:
+            rejilla[(int(p[2] / celda), int(p[3] / celda))].append(p)
+    for pid, p in paradas.items():
+        if p[1]:
+            continue
+        cx, cy = int(p[2] / celda), int(p[3] / celda)
+        mejor, dmin = None, max_km
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for q in rejilla.get((cx + dx, cy + dy), ()):
+                    d = math.hypot((q[2] - p[2]) * 111.2, (q[3] - p[3]) * 111.2 * math.cos(math.radians(p[2])))
+                    if d < dmin:
+                        mejor, dmin = q, d
+        if mejor:
+            p[1] = mejor[1]
+
+
+def _permisos(grupo, horas, n):
+    """Dónde se puede subir y hasta dónde se puede bajar en un autobús de verdad.
+
+    El Consorcio parte cada expedición en varios «viajes»: el completo y uno por cada parada desde la
+    que se puede subir con reglas propias (subiendo en Oviedo, por ejemplo, no se puede bajar dentro de
+    Oviedo). Cada uno es un tramo final del completo. Devuelve, por parada, [primera, última] en la que
+    se puede bajar si se sube ahí, o 0 si ahí no se puede subir; None si no hay ninguna restricción."""
+    rangos = [None] * n
+    largo = [x[1] for x in horas[grupo[0]]]
+    for tid in grupo:
+        f = horas[tid]
+        o = n - len(f)
+        if o < 0 or [x[1] for x in f] != largo[o:]:
+            continue
+        for k, x in enumerate(f):
+            if x[3] == "1":                    # aquí no se sube
+                continue
+            js = [o + m for m in range(k + 1, len(f)) if f[m][4] != "1"]
+            if not js:
+                continue
+            i, r = o + k, rangos[o + k]
+            rangos[o + k] = [min(js), max(js)] if r is None else [min(r[0], min(js)), max(r[1], max(js))]
+    if all(rangos[i] == [i + 1, n - 1] for i in range(n - 1)):
+        return None
+    return [r or 0 for r in rangos]
+
+
 def extraer(red, dia, zip_cta=None):
     """La red de un día (ver el formato arriba). Se guarda en caché por día."""
     conf = REDES[red]
+    inter = conf.get("tipo") == "interurbano"
     os.makedirs(CACHE, exist_ok=True)
     cache = os.path.join(CACHE, "cta_%s_%s_v%d.json" % (red, dia.strftime("%Y%m%d"), VERSION_CACHE))
     if zip_cta is None and os.path.exists(cache):
@@ -186,7 +283,11 @@ def extraer(red, dia, zip_cta=None):
     z = zipfile.ZipFile(zip_cta or obtener_zip())
     nombres = set(z.namelist())
     ds = dia.strftime("%Y%m%d")
-    rutas = {r["route_id"]: r for r in _csv(z, "routes.txt") if r.get("agency_id") in conf["agencias"]}
+
+    def mia(aid):
+        return aid not in conf["excluir"] if "excluir" in conf else aid in conf["agencias"]
+    rutas = {r["route_id"]: r for r in _csv(z, "routes.txt") if mia(r.get("agency_id"))}
+    agencias = {a["agency_id"]: a.get("agency_name", "") for a in _csv(z, "agency.txt")} if "agency.txt" in nombres else {}
     act = set()
     if "calendar.txt" in nombres:
         col = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"][dia.weekday()]
@@ -201,33 +302,56 @@ def extraer(red, dia, zip_cta=None):
     for r in _csv(z, "stop_times.txt"):
         if r["trip_id"] in viajes:
             try:
-                horas[r["trip_id"]].append((int(r["stop_sequence"]), r["stop_id"], _hora(r["departure_time"] or r["arrival_time"])))
+                horas[r["trip_id"]].append((int(r["stop_sequence"]), r["stop_id"], _hora(r["departure_time"] or r["arrival_time"]),
+                                            r.get("pickup_type", ""), r.get("drop_off_type", "")))
             except (ValueError, KeyError):
                 continue
-    usadas = {s for v in horas.values() for _, s, _ in v}
+    for filas in horas.values():
+        filas.sort()
+    usadas = {x[1] for v in horas.values() for x in v}
     paradas = {}
     for p in _csv(z, "stops.txt"):
         if p["stop_id"] in usadas:
             n, loc = limpia_parada(p["stop_name"])
-            if not loc:     # Oviedo y Mieres no ponen la localidad: la calle, que orienta más
+            if not loc and not inter:     # Oviedo y Mieres no ponen la localidad: la calle, que orienta más
                 loc = _bonito(re.sub(r"\s+", " ", p.get("stop_desc") or ""))
             paradas[p["stop_id"]] = [n, loc, round(float(p["stop_lat"]), 6), round(float(p["stop_lon"]), 6)]
-    variantes, vidx, patrones, pidx, lista, forma_de = [], {}, [], {}, [], {}
+    if inter:
+        _localidades_cercanas(paradas)
+
+    def cod_de(r):
+        if not inter:
+            return codigo_linea(r)
+        return r["route_id"]
+    # cada autobús de verdad: el viaje completo y sus tramos (misma ruta, misma llegada al final)
+    grupos = defaultdict(list)
     for tid, filas in horas.items():
-        filas.sort()
+        if filas:
+            grupos[(viajes[tid]["route_id"], filas[-1][1], round(filas[-1][2], 1))].append(tid)
+    variantes, vidx, patrones, pidx, lista, forma_de = [], {}, [], {}, [], {}
+    for g in grupos.values():
+        g.sort(key=lambda x: (-len(horas[x]), x))
+        tid = g[0]
+        filas = horas[tid]
         t = viajes[tid]
-        cod = codigo_linea(rutas[t["route_id"]])
-        seq = tuple(s for _, s, _ in filas)
-        clave = (cod, seq)
+        cod = cod_de(rutas[t["route_id"]])
+        seq = tuple(x[1] for x in filas)
+        perm = _permisos(g, horas, len(filas)) if len(g) > 1 or any(x[3] == "1" or x[4] == "1" for x in filas) else None
+        clave = (cod, seq, json.dumps(perm))
         if clave not in vidx:
-            dest = _bonito(_quita_codigo(t.get("trip_headsign") or "", cod))
+            cab = next((viajes[x].get("trip_headsign") for x in g if viajes[x].get("trip_headsign")), "")
+            dest = _bonito(_quita_codigo(cab, cod if not inter else codigo_linea(rutas[t["route_id"]])))
             if not dest or dest.lower() == cod.lower():
                 dest = paradas.get(seq[-1], [""])[0]
             vidx[clave] = len(variantes)
-            variantes.append({"linea": cod, "destino": dest, "paradas": list(seq), "forma": None})
-            if t.get("shape_id"):
-                forma_de[vidx[clave]] = t["shape_id"]
-        off = tuple(round(h - filas[0][2], 1) for _, _, h in filas)
+            v = {"linea": cod, "destino": dest, "paradas": list(seq), "forma": None}
+            if perm:
+                v["perm"] = perm
+            variantes.append(v)
+            forma = next((viajes[x].get("shape_id") for x in g if viajes[x].get("shape_id")), "")
+            if forma:
+                forma_de[vidx[clave]] = forma
+        off = tuple(round(x[2] - filas[0][2], 1) for x in filas)
         if off not in pidx:
             pidx[off] = len(patrones)
             patrones.append(list(off))
@@ -239,23 +363,43 @@ def extraer(red, dia, zip_cta=None):
         for r in _csv(z, "shapes.txt"):
             if r["shape_id"] in quiero:
                 pts[r["shape_id"]].append((int(r["shape_pt_sequence"]), float(r["shape_pt_lat"]), float(r["shape_pt_lon"])))
+        hechas = {}
         for i, sid in forma_de.items():
             if pts.get(sid):
-                variantes[i]["forma"] = _simplificar([[la, lo] for _, la, lo in sorted(pts[sid])])
-    por_linea = defaultdict(list)
-    for r in rutas.values():
-        por_linea[codigo_linea(r)].append(r.get("route_long_name", ""))
-    codigos = sorted({v["linea"] for v in variantes}, key=_orden)
+                if sid not in hechas:
+                    hechas[sid] = _simplificar([[la, lo] for _, la, lo in sorted(pts[sid])], conf.get("tolerancia_km", 0.008))
+                variantes[i]["forma"] = hechas[sid]
+        del pts
     lineas = {}
-    for i, c in enumerate(codigos):
-        r0 = next((r for r in rutas.values() if codigo_linea(r) == c), {})
-        col = r0.get("route_color")
-        lineas[c] = {"codigo": NOCTURNOS.get(c.lower(), c),
-                     "nombre": _nombre_linea(por_linea[c], c),
-                     "color": ("#" + col) if col and len(col) == 6 else PALETA[i % len(PALETA)]}
-    datos = {"red": red, "nombre": conf["nombre"], "operador": conf.get("operador", ""), "color": conf["color"],
+    usadas_l = {v["linea"] for v in variantes}
+    if inter:
+        ops = sorted({rutas[c]["agency_id"] for c in usadas_l}, key=lambda a: -sum(1 for x in lista if variantes[x[0]]["linea"] in rutas and rutas[variantes[x[0]]["linea"]]["agency_id"] == a))
+        color_op = {a: PALETA[i % len(PALETA)] for i, a in enumerate(ops)}
+        for c in sorted(usadas_l, key=lambda c: (_nombre_linea([rutas[c].get("route_long_name", "")]), c)):
+            r = rutas[c]
+            cc = codigo_linea(r)
+            largo = r.get("route_long_name", "")
+            propio = bool(re.search(r"\d", cc)) and largo.upper().startswith(cc.upper())
+            lineas[c] = {"codigo": cc if propio else _operador_corto(r["agency_id"], agencias.get(r["agency_id"])),
+                         "nombre": _nombre_linea([largo], cc), "via": _via(largo),
+                         "operador": "ALSA" if r["agency_id"] == "19" else agencias.get(r["agency_id"], ""),
+                         "color": ("#" + r["route_color"]) if len(r.get("route_color") or "") == 6 else color_op[r["agency_id"]]}
+    else:
+        por_linea = defaultdict(list)
+        for r in rutas.values():
+            por_linea[codigo_linea(r)].append(r.get("route_long_name", ""))
+        for i, c in enumerate(sorted(usadas_l, key=_orden)):
+            r0 = next((r for r in rutas.values() if codigo_linea(r) == c), {})
+            col = r0.get("route_color")
+            lineas[c] = {"codigo": NOCTURNOS.get(c.lower(), c),
+                         "nombre": _nombre_linea(por_linea[c], c),
+                         "color": ("#" + col) if col and len(col) == 6 else PALETA[i % len(PALETA)]}
+    datos = {"red": red, "tipo": conf.get("tipo", "urbano"), "nombre": conf["nombre"],
+             "titulo": conf.get("titulo", "Autobuses de " + conf["nombre"]),
+             "operador": conf.get("operador", ""), "color": conf["color"],
              "fecha": dia.isoformat(), "lineas": lineas, "paradas": paradas,
-             "variantes": variantes, "patrones": patrones, "viajes": lista}
+             "variantes": variantes, "patrones": patrones, "viajes": lista,
+             "alias": {l: ALIAS[l] for l in {p[1] for p in paradas.values()} if l in ALIAS}}
     if zip_cta is None:
         with open(cache, "w", encoding="utf-8") as f:
             json.dump(datos, f, ensure_ascii=False, separators=(",", ":"))

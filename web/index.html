@@ -22,9 +22,10 @@
     <div class="el-marca">Asturias en tiempo real</div>
     <h1 class="el-tit">¿Cómo vas a viajar?</h1>
     <button type="button" class="el-op el-tren" data-modo="tren"><span class="el-ic">🚆</span><span><b>Tren</b><small>Cercanías, regionales, AVE y larga distancia</small></span><span class="el-fl">›</span></button>
-    <button type="button" class="el-op el-bus" data-modo="bus"><span class="el-ic">🚌</span><span><b>Bus</b><small>Gijón en directo · Oviedo, Avilés y Mieres</small></span><span class="el-fl">›</span></button>
+    <button type="button" class="el-op el-bus" data-modo="bus"><span class="el-ic">🚌</span><span><b>Bus</b><small>Entre pueblos y ciudades · urbanos de Gijón, Oviedo, Avilés y Mieres</small></span><span class="el-fl">›</span></button>
     <div id="el-ciudades" class="el-ciudades" hidden>
-      <div class="el-sub">¿En qué ciudad?</div>
+      <button type="button" class="el-op el-ciudad el-inter" data-modo="bus:interurbano"><span class="el-ic">🛣️</span><span><b>Entre pueblos y ciudades</b><small>Interurbanos de toda Asturias · ALSA y demás · horario oficial</small></span><span class="el-fl">›</span></button>
+      <div class="el-sub">Urbanos: ¿en qué ciudad?</div>
       <button type="button" class="el-op el-ciudad" data-modo="bus:gijon"><span class="el-ic">🚍</span><span><b>Gijón</b><small>EMTUSA · posición y llegadas en directo</small></span><span class="el-fl">›</span></button>
       <button type="button" class="el-op el-ciudad" data-modo="bus:oviedo"><span class="el-ic">🚌</span><span><b>Oviedo</b><small>TUA · horario oficial</small></span><span class="el-fl">›</span></button>
       <button type="button" class="el-op el-ciudad" data-modo="bus:aviles"><span class="el-ic">🚌</span><span><b>Avilés</b><small>Urbano de Avilés · horario oficial</small></span><span class="el-fl">›</span></button>
@@ -38,7 +39,7 @@
   var m = null, q = location.search.indexOf("elegir") >= 0;
   try { m = JSON.parse(localStorage.getItem("c4.modo_auto") || "null"); } catch (e) { m = null; }
   var destinos = { "bus": "/bus/", "bus:gijon": "/bus/" };
-  if (/^bus:(aviles|oviedo|mieres)$/.test(m || "")) destinos[m] = "/cta/?red=" + m.slice(4);
+  if (/^bus:(aviles|oviedo|mieres|interurbano)$/.test(m || "")) destinos[m] = "/cta/?red=" + m.slice(4);
   if (!location.hash && !q && destinos[m]) { location.replace(destinos[m]); return; }
   if (location.hash || (m === "tren" && !q)) return;
   document.getElementById("elegir").hidden = false;

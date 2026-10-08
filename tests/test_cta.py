@@ -105,5 +105,78 @@ class TestCodigos(unittest.TestCase):
         self.assertEqual(cta._titulo("MIERES DEL CAMÍN"), "Mieres del Camín")
 
 
+def zip_inter():
+    """Como el GTFS del Consorcio: cada expedición partida en el viaje completo y un tramo por cada
+    parada con reglas propias (subiendo en Oviedo no se puede bajar en Oviedo, etc.)."""
+    f = io.BytesIO()
+    with zipfile.ZipFile(f, "w") as z:
+        z.writestr("agency.txt", "agency_id,agency_name\n19,Automóviles Luarca SAU\n56,Villa Excursiones SA\n28,Tranvía\n")
+        z.writestr("routes.txt", "route_id,agency_id,route_short_name,route_long_name,route_type\n"
+                                 "4566,19,\"Ovi\",\"Oviedo-Gijón [Paradas]\",3\n78,56,\"L22\",\"L22 - Avilés-Pillarno\",3\n"
+                                 "A1,28,L1,L1 - La Luz-Llaranes,3\n")
+        z.writestr("calendar_dates.txt", "service_id,date,exception_type\nS,20261008,1\n")
+        z.writestr("trips.txt", "route_id,service_id,trip_id,trip_headsign,direction_id,shape_id\n"
+                                "4566,S,X,Gijón,0,SH\n4566,S,X1,Gijón,0,\n4566,S,X2,Gijón,0,\n4566,S,X3,Gijón,0,\n"
+                                "78,S,V,Pillarno,0,\nA1,S,U,Llaranes,0,\n")
+        z.writestr("stops.txt", "stop_id,stop_name,stop_desc,stop_lat,stop_lon\n"
+                                "O1,[OVIEDO/UVIÉU]  Estación Bus Oviedo [CTA 21470],,43.3650,-5.8530\n"
+                                "T1,Melquiades Cabal,,43.3672,-5.8510\n"
+                                "M1,[LUGONES/LLUGONES]  El Castro [CTA 02313],,43.4010,-5.8110\n"
+                                "G1,[GIJÓN/XIXÓN]  Porceyo [CTA 00960],,43.5180,-5.7120\n"
+                                "G2,[GIJÓN/XIXÓN]  Estación de autobuses [CTA 00784],,43.5370,-5.6740\n"
+                                "A,[AVILÉS]  Plaza [CTA 1],,43.5560,-5.9240\nP,[PILLARNO]  Iglesia [CTA 2],,43.5800,-5.9600\n"
+                                "U1,[AVILÉS]  La Luz [CTA 3],,43.55,-5.93\nU2,[AVILÉS]  Llaranes [CTA 4],,43.56,-5.90\n")
+        st = "trip_id,arrival_time,departure_time,stop_id,stop_sequence,pickup_type,drop_off_type\n"
+        horas = {"O1": "06:45:00", "T1": "06:47:00", "M1": "07:02:00", "G1": "07:37:00", "G2": "07:45:00"}
+        def filas(tid, reglas):
+            out = ""
+            orden = ["O1", "T1", "M1", "G1", "G2"]
+            for k, (s_, r) in enumerate(reglas):
+                out += "%s,%s,%s,%s,%d,%s,%s\n" % (tid, horas[s_], horas[s_], s_, orden.index(s_) + 1, r[0], r[1])
+            return out
+        st += filas("X", [("O1", "10"), ("T1", "10"), ("M1", "00"), ("G1", "10"), ("G2", "00")])
+        st += filas("X1", [("O1", "00"), ("T1", "11"), ("M1", "10"), ("G1", "10"), ("G2", "10")])
+        st += filas("X2", [("T1", "00"), ("M1", "10"), ("G1", "10"), ("G2", "10")])
+        st += filas("X3", [("G1", "00"), ("G2", "10")])
+        st += "V,10:00:00,10:00:00,A,1,,\nV,10:20:00,10:20:00,P,2,,\nU,09:00:00,09:00:00,U1,1,,\nU,09:10:00,09:10:00,U2,2,,\n"
+        z.writestr("stop_times.txt", st)
+        z.writestr("shapes.txt", "shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence\nSH,43.365,-5.853,1\nSH,43.45,-5.75,2\nSH,43.537,-5.674,3\n")
+    f.seek(0)
+    return f
+
+
+class TestInterurbanos(unittest.TestCase):
+    def setUp(self):
+        self.d = cta.extraer("interurbano", date(2026, 10, 8), zip_cta=zip_inter())
+
+    def test_un_autobus_por_expedicion(self):
+        d = self.d
+        self.assertEqual(d["tipo"], "interurbano")
+        self.assertEqual(len(d["viajes"]), 2)                       # la expedición partida en 4 cuenta 1
+        self.assertNotIn("U1", d["paradas"])                        # el urbano de Avilés, fuera
+        v = next(v for v in d["variantes"] if v["linea"] == "4566")
+        self.assertEqual(v["paradas"], ["O1", "T1", "M1", "G1", "G2"])
+        self.assertEqual(v["destino"], "Gijón")
+        self.assertTrue(v["forma"])
+
+    def test_reglas_de_subida_y_bajada(self):
+        v = next(v for v in self.d["variantes"] if v["linea"] == "4566")
+        # subiendo en Oviedo, a partir de Lugones; en Lugones, a Gijón; en Porceyo, solo a la estación
+        self.assertEqual(v["perm"], [[2, 4], [2, 4], [3, 4], [4, 4], 0])
+        l22 = next(v for v in self.d["variantes"] if v["linea"] == "78")
+        self.assertNotIn("perm", l22)
+
+    def test_lineas_y_localidades(self):
+        d = self.d
+        self.assertEqual(d["lineas"]["4566"]["codigo"], "ALSA")
+        self.assertEqual(d["lineas"]["4566"]["nombre"], "Oviedo – Gijón")
+        self.assertEqual(d["lineas"]["4566"]["via"], "Paradas")
+        self.assertEqual(d["lineas"]["78"]["codigo"], "L22")
+        self.assertEqual(d["lineas"]["78"]["nombre"], "Avilés – Pillarno")
+        self.assertEqual(d["paradas"]["O1"][:2], ["Estación Bus Oviedo", "Oviedo"])     # «OVIEDO/UVIÉU»
+        self.assertEqual(d["paradas"]["T1"][1], "Oviedo")           # sin localidad: la de al lado
+        self.assertEqual(d["paradas"]["G2"][1], "Gijón")
+
+
 if __name__ == "__main__":
     unittest.main()
