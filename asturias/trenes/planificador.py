@@ -79,6 +79,12 @@ def geocodificar(texto, linea, bus, con_internet=True, grafo=None):
         lat, lon, nom = LUGARES[clave]
         return {"lat": lat, "lon": lon, "nombre": nom, "tipo": "lugar"}
 
+    # un pueblo pequeño con estación («Candás»): todo el pueblo, estación incluida
+    if grafo is not None:
+        p = grafo.localidad_pequena_exacta(texto)
+        if p:
+            return p
+
     # 2) estación de tren (cualquier línea de Cercanías Asturias)
     if linea is not None:
         try:

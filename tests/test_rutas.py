@@ -147,6 +147,21 @@ class TestRutas(unittest.TestCase):
         g = rutas.Grafo(EST, {"interurbano": d})          # antes fallaba con KeyError
         self.assertTrue(all(k in g.localidades for k in g.grande_de.values()))
 
+    def test_pueblo_con_estacion(self):
+        est = P.Estaciones([
+            {"id": "A", "nombre": "Ciudad A", "lat": 43.50, "lon": -5.80, "lineas": ["C1"]},
+            {"id": "A2", "nombre": "Ciudad A-Apeadero", "lat": 43.503, "lon": -5.801, "lineas": ["C1"]},
+            {"id": "B", "nombre": "Estación B", "lat": 43.50, "lon": -5.55, "lineas": ["C1"]},
+        ])
+        g = rutas.Grafo(est, {"interurbano": red_bus()})
+        p = g.localidad_pequena_exacta("Ciudad A")
+        self.assertIsNotNone(p)
+        tipos = {g.nodos[i][0] for i in p["nodos"]}
+        self.assertEqual(tipos, {"S", "T"})                       # paradas y las dos estaciones
+        self.assertEqual(sum(1 for i in p["nodos"] if g.nodos[i][0] == "T"), 2)
+        self.assertIsNone(g.localidad_pequena_exacta("Villabus"))    # sin estación con ese nombre
+        self.assertIsNone(g.localidad_pequena_exacta("Estación B"))
+
     def test_cambio_andando(self):
         # S3 y la estación A están a unos 150 m: se puede cambiar andando
         i3, ia = self.g.idx[("S", "S3")], self.g.idx[("T", 0)]

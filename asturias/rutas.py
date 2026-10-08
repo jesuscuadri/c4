@@ -88,6 +88,38 @@ class Grafo:
             if n[0] == "S" and n[5]:
                 self.localidades.setdefault(n[5], []).append(i)
         self._aclarar_nombres()
+        # las estaciones de tren de cada pueblo («Candás» y «Candás-Apeadero» son de Candás)
+        self.estaciones_de = {}
+        est_t = [(i, normaliza(n[2]), (n[3], n[4])) for i, n in enumerate(self.nodos) if n[0] == "T"]
+        for loc, ns in self.localidades.items():
+            base = normaliza(loc.split(" (")[0])
+            c = self._centro_de(ns)
+            for i, k, pos in est_t:
+                if (k == base or k.startswith(base + " ") or k.startswith(base + "-")) \
+                        and distancia_km(c, pos) <= 3.0:
+                    self.estaciones_de.setdefault(loc, []).append(i)
+        self._pequenos = {}
+
+    def pueblo_pequeno(self, loc):
+        """Un pueblo cuyas paradas están todas cerca unas de otras (no una ciudad grande)."""
+        if loc not in self._pequenos:
+            ns = self.localidades[loc]
+            c = self._centro_de(ns)
+            d = sorted(distancia_km(c, (self.nodos[i][3], self.nodos[i][4])) for i in ns)
+            self._pequenos[loc] = d[int(0.8 * (len(d) - 1))] <= 2.0
+        return self._pequenos[loc]
+
+    def tiene_estacion(self, loc):
+        return bool(self.estaciones_de.get(loc))
+
+    def localidad_pequena_exacta(self, texto):
+        """El pueblo con ese nombre exacto, si es pequeño y tiene estación (para que «Candás» sea todo Candás)."""
+        n = normaliza(texto)
+        for loc in self.localidades:
+            if (normaliza(loc) == n or normaliza(self.alias.get(loc, "")) == n) \
+                    and self.tiene_estacion(loc) and self.pueblo_pequeno(loc):
+                return self.punto_localidad(loc)
+        return None
 
     def _aclarar_nombres(self):
         """Si un pueblo se llama como el principio de otro más grande («Mieres», una aldea de Siero,
@@ -178,7 +210,8 @@ class Grafo:
         ns = self.localidades[loc]
         lat = sum(self.nodos[i][3] for i in ns) / len(ns)
         lon = sum(self.nodos[i][4] for i in ns) / len(ns)
-        return {"lat": lat, "lon": lon, "nombre": loc, "tipo": "localidad", "nodos": list(ns)}
+        return {"lat": lat, "lon": lon, "nombre": loc, "tipo": "localidad",
+                "nodos": list(ns) + [i for i in self.estaciones_de.get(loc, []) if i not in ns]}
 
     def buscar_parada(self, texto):
         n = normaliza(texto)
