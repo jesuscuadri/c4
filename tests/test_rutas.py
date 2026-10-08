@@ -114,6 +114,16 @@ class TestRutas(unittest.TestCase):
         bus = next(e for e in p["etapas"] if e["tipo"] == "autobus")
         self.assertEqual(bus["sale_hm"], "10:20")
 
+    def test_sube_donde_menos_andas(self):
+        # el origen está a 5 m de «Iglesia» y a ~150 m de «Plaza» (la primera parada del mismo autobús)
+        origen = {"lat": 43.7010, "lon": -5.8010, "nombre": "Mi casa", "tipo": "gps"}
+        destino = {"lat": 43.5005, "lon": -5.5505, "nombre": "Casa", "tipo": "gps"}
+        res = {"trenes": [tren("T1", 640, 670)]}
+        p = rutas.planificar(self.g, res, None, origen, destino, ahora=580)
+        self.assertTrue(p["ok"], p)
+        bus = next(e for e in p["etapas"] if e["tipo"] == "autobus")
+        self.assertEqual(bus["subir"], "Iglesia")
+
     def test_llegar_antes_de(self):
         origen = self.g.punto_localidad("Villabus")
         destino = {"lat": 43.5005, "lon": -5.5505, "nombre": "Casa", "tipo": "gps"}

@@ -415,6 +415,33 @@ def raptor(g, trenes, listo, llegadas, ahora, max_veh=MAX_VEHICULOS, horizonte=H
     return {"llega": total, "nodo_final": n_fin, "nodo_inicial": nodo, "tramos": tramos}
 
 
+def _afinar_subida(g, v, listo, acc):
+    """Llegando igual, mejor subir al mismo autobús en una parada donde no haya que andar tanto
+    (el cálculo sube en la primera parada posible, aunque esté a un kilómetro y haya otra en tu pueblo)."""
+    x = next((t for t in v["tramos"] if not t.get("pie")), None)
+    if x is None or "bus" not in x or v["tramos"][0] is not x:
+        return
+    ruta = g.rutas[x["bus"]]
+    ns, perm = ruta["nodos"], ruta["perm"]
+    off = _offsets(g, x)
+    if off is None:
+        return
+    mejor = (acc[x["de"]][1], x["i"], x["de"])
+    for i2 in range(x["i"], x["j"]):
+        nodo = ns[i2]
+        if nodo not in listo or nodo not in acc or (perm and not perm[i2]):
+            continue
+        if perm and not (perm[i2][0] <= x["j"] <= perm[i2][1]):
+            continue
+        if x["t0"] + off[i2] < listo[nodo] - 1e-6:
+            continue
+        if acc[nodo][1] < mejor[0] - 1.0:
+            mejor = (acc[nodo][1], i2, nodo)
+    if mejor[2] != x["de"]:
+        x["i"], x["de"] = mejor[1], mejor[2]
+        v["nodo_inicial"] = mejor[2]
+
+
 def _sale(g, x):
     if "tren" in x:
         return x["tren"]["est_d"][x["jb"]]
@@ -574,6 +601,7 @@ def planificar(g, res, bus, origen, destino, ahora, en_vivo=True, horizonte=HORI
             s_v = s_w
             continue
         v, s_v, p_v = w, s_w, p_w
+    _afinar_subida(g, v, listo, acc)
     sale = _montar(g, plan, v, acc, sal, ahora, est)
     # si andando se llega antes que con todo esto (sitios cercanos), mejor andar
     andando = minutos_andando(dist_od)
