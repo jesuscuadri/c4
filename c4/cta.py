@@ -17,6 +17,7 @@ import io
 import json
 import os
 import re
+import unicodedata
 import time
 import zipfile
 from collections import Counter, defaultdict
@@ -25,7 +26,7 @@ from .util import CACHE, http_get
 
 # Copia pública diaria del GTFS del Consorcio (el original del Punto de Acceso Nacional pide registro)
 CTA_URLS = ["https://files.mobilitydatabase.org/mdb-2827/latest.zip"]
-VERSION_CACHE = 4
+VERSION_CACHE = 6
 
 REDES = {
     "aviles": {"nombre": "Avilés", "agencias": ["28"], "color": "#0b5cab",
@@ -84,7 +85,7 @@ def _hora(s):
 
 def _titulo(s):
     s = s.strip().lower()
-    s = re.sub(r"(^|[\s/(\-])(\w)", lambda m: m.group(1) + m.group(2).upper(), s)
+    s = re.sub(r"(^|[\s/(\-'])(\w)", lambda m: m.group(1) + m.group(2).upper(), s)
     # «Mieres Del Camín» -> «Mieres del Camín» (salvo al principio)
     return re.sub(r"(?<=\s)(\w+)", lambda m: m.group(1).lower() if m.group(1).lower() in MENORES else m.group(1), s)
 
@@ -125,7 +126,8 @@ def _asturianez(t):
     t = t.upper()
     palabras = re.findall(r"[\wÁÉÍÓÚÜÑ']+", t)
     return (2 * ("X" in t) + sum(1 for w in palabras if w.startswith("LL")) + sum(1 for w in palabras if w.endswith("U"))
-            + sum(1 for w in palabras if w in ("LES", "L'", "ELS")) + ("L'" in t) + ("CUA" in t))
+            + sum(1 for w in palabras if w in ("LES", "L'", "ELS")) + ("L'" in t) + ("D'" in t) + ("CUA" in t)
+            + sum(1 for w in palabras if w.endswith("UES")))
 
 
 def _localidad(loc):
@@ -140,12 +142,38 @@ def _localidad(loc):
     if len(partes) < 2:
         return bonito(loc).strip(), ""
     a, b = partes[0], partes[1]
-    if _asturianez(b) < _asturianez(a):
+    de = lambda x: bool(re.search(r"\bDE(L)?\b", x.upper()))     # «Soto de Rey» / «Soto Rei»
+    if _asturianez(b) + de(a) < _asturianez(a) + de(b):
         a, b = b, a
     return bonito(a), bonito(b)
 
 
 ALIAS = {}      # localidad -> su otro nombre (se rellena al leer las paradas)
+
+
+# palabras que el Consorcio escribe sin tilde en algunos nombres (Oviedo sobre todo)
+def _sin(w):
+    return "".join(c for c in unicodedata.normalize("NFD", w.lower()) if unicodedata.category(c) != "Mn")
+
+
+_TILDES = {_sin(w): w for w in (
+    "América Andrés José María García Fernández González Rodríguez López Pérez Martínez Sánchez Jesús Príncipe Estación "
+    "Policlínica Paraíso Mercadín Gijón Avilés Ramón Bernardo Asunción Concepción Constitución Educación Información "
+    "Avenida Fábrica Cámara Teléfonos Ángel Ángeles Pumarín Ciaño Siero Tenderina Cándido Víctor Mª Nicolás Tomás Martín "
+    "Fernán Menéndez Álvarez Álvaro Béjar Cuéllar Hernández Jiménez Núñez Ramírez Suárez Vázquez Díaz Gómez Gutiérrez").split()}
+_TILDES.pop("mª", None)
+_TILDES["huca"] = "HUCA"
+
+
+def _con_tildes(nombre):
+    """«Plaza America» -> «Plaza América»: solo palabras sueltas de la lista, sin tocar las que ya llevan tilde."""
+    def f(m):
+        w = m.group(0)
+        b = _TILDES.get(_sin(w))
+        if not b or w != _sin(w).upper() and w != _sin(w) and w != _sin(w).capitalize():
+            return w          # no está en la lista, o ya lleva tilde
+        return b.upper() if w.isupper() and len(w) > 1 else b if w[0].isupper() else b.lower()
+    return re.sub(r"[A-Za-zÁÉÍÓÚáéíóúÑñ]+", f, nombre)
 
 
 def limpia_parada(nombre):
@@ -157,7 +185,9 @@ def limpia_parada(nombre):
     loc, otro = _localidad(m.group(1))
     if otro:
         ALIAS[loc] = otro
-    return m.group(2).strip(), loc.strip()
+    # «Estación Bus Oviedo IL- Pepe Cosmen» (inicio/final de línea): «Estación Bus Oviedo · Pepe Cosmen»
+    nombre = re.sub(r"\s+[IF]L-\s*", " · ", m.group(2).strip())
+    return _con_tildes(nombre), loc.strip()
 
 
 def _nombre_linea(nombres, cod=""):

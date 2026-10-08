@@ -93,6 +93,14 @@ class TestOviedo(unittest.TestCase):
         self.assertEqual(len(d["viajes"]), 24)
 
 
+class TestTildes(unittest.TestCase):
+    def test_restaura_tildes(self):
+        self.assertEqual(cta.limpia_parada("[OVIEDO] Plaza America")[0], "Plaza América")
+        self.assertEqual(cta.limpia_parada("[OVIEDO] San Andres")[0], "San Andrés")
+        self.assertEqual(cta.limpia_parada("[OVIEDO] Huca")[0], "HUCA")
+        self.assertEqual(cta.limpia_parada("[OVIEDO] Plaza América")[0], "Plaza América")
+
+
 class TestCodigos(unittest.TestCase):
     def test_codigos_recortados_del_consorcio(self):
         self.assertEqual(cta.codigo_linea({"route_short_name": "L1.", "route_long_name": "L1.1 San Andrés-La Hueria"}), "L1.1")

@@ -378,37 +378,40 @@ class App:
         t["est_a"] = [None if x is None else round(x, 3) for x in a]
         t["est_d"] = [None if x is None else round(x, 3) for x in d]
 
-    def red_cta(self, red):
+    def red_cta(self, red, manana=False):
         """Horario de hoy de una red de bus del Consorcio, ya en JSON (y comprimido). Se prepara en
         segundo plano la primera vez (el fichero del Consorcio pesa ~6 MB)."""
         if not hasattr(self, "_cta"):
             self._cta, self.error_cta, self._cta_en, self._cta_formas = {}, {}, set(), {}
             self._cta_lock = threading.Lock()
-        hoy = date.today()
-        c = self._cta.get(red)
-        if c and c[0] == hoy:
+        dia = date.today() + timedelta(days=1 if manana else 0)
+        clave = red + "+1" if manana else red
+        c = self._cta.get(clave)
+        if c and c[0] == dia:
             return c[1]
-        if red not in self._cta_en:
-            self._cta_en.add(red)
+        if clave not in self._cta_en:
+            self._cta_en.add(clave)
 
             def preparar():
                 try:
                     with self._cta_lock:      # de una en una: cada red recorre el fichero entero
-                        d = cta.extraer(red, hoy)
-                    if cta.REDES[red].get("formas_aparte"):
+                        d = cta.extraer(red, dia)
+                    if manana:
+                        d = dict(d, variantes=[dict(v, forma=None) for v in d["variantes"]])   # los recorridos solo de hoy
+                    elif cta.REDES[red].get("formas_aparte"):
                         # los recorridos dibujados pesan mucho: se piden por línea al abrirla en el mapa
                         self._cta_formas[red] = {i: (v["linea"], v["forma"]) for i, v in enumerate(d["variantes"]) if v.get("forma")}
                         d = dict(d, variantes=[dict(v, forma=None) for v in d["variantes"]])
                     crudo = json.dumps(d, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-                    self._cta[red] = (hoy, (crudo, gzip.compress(crudo, 6)))
-                    self.error_cta.pop(red, None)
+                    self._cta[clave] = (dia, (crudo, gzip.compress(crudo, 6)))
+                    self.error_cta.pop(clave, None)
                     print("Bus %s: %d líneas · %d paradas · %d viajes hoy" % (
                         d["nombre"], len(d["lineas"]), len(d["paradas"]), len(d["viajes"])))
                 except Exception as e:  # noqa: BLE001
                     traceback.print_exc()
-                    self.error_cta[red] = str(e)
+                    self.error_cta[clave] = str(e)
                 finally:
-                    self._cta_en.discard(red)
+                    self._cta_en.discard(clave)
             threading.Thread(target=preparar, daemon=True).start()
         return c[1] if c else None    # mientras, el de ayer si lo hay
 
@@ -788,9 +791,10 @@ def servir(app, abrir=True, en_red=False, publico=False):
                 red = q.get("red", ["aviles"])[0]
                 if red not in cta.REDES:
                     return self._json({"error": "No conozco esa red."})
-                c = app.red_cta(red)
+                man = q.get("dia", [""])[0] == "manana"
+                c = app.red_cta(red, man)
                 if c is None:
-                    return self._json({"cargando": True, "error": app.error_cta.get(red)})
+                    return self._json({"cargando": True, "error": app.error_cta.get(red + "+1" if man else red)})
                 return self._enviar(c[0], "application/json; charset=utf-8", gz=c[1])
             if ruta == "/api/cta/formas":
                 q = parse_qs(urlparse(self.path).query)

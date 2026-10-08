@@ -9,6 +9,7 @@ const RED_ID = new URLSearchParams(location.search).get("red") || "aviles";
 const norm = (s) => (s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
 const hm = (m) => { m = Math.floor(m + 1e-6); return String(Math.floor(m / 60) % 24).padStart(2, "0") + ":" + String(((m % 60) + 60) % 60).padStart(2, "0"); };
 const ahoraMin = () => { const d = new Date(); return d.getHours() * 60 + d.getMinutes() + d.getSeconds() / 60; };
+const ahoraViaje = () => (DIA ? -1 : ahoraMin());     // mañana: desde las 00:00
 function leer(k, def) { try { const v = localStorage.getItem("cta." + RED_ID + "." + k); return v == null ? def : JSON.parse(v); } catch (e) { return def; } }
 function guardar(k, v) { try { localStorage.setItem("cta." + RED_ID + "." + k, JSON.stringify(v)); } catch (e) { /* sin almacenamiento */ } }
 function toast(t) { const x = $("toast"); x.textContent = t; x.hidden = false; clearTimeout(toast._t); toast._t = setTimeout(() => { x.hidden = true; }, 2500); }
@@ -37,15 +38,43 @@ async function cargar() {
     await new Promise((r) => setTimeout(r, 2000));
   }
   INTER = D.tipo === "interurbano";
-  PORPARADA = {}; VIAJES_VAR = {};
+  HOY = { D, ...indexar(D) };
+  usar(HOY);
+  return true;
+}
+/* los índices que se calculan de un horario (también el de mañana) */
+function indexar(D) {
+  const PORPARADA = {}, VIAJES_VAR = {};
   D.variantes.forEach((v, vi) => v.paradas.forEach((s, i) => (PORPARADA[s] = PORPARADA[s] || []).push([vi, i])));
   for (const [vi, sal, p] of D.viajes) (VIAJES_VAR[vi] = VIAJES_VAR[vi] || []).push([sal, p]);
   // pueblos y ciudades (para buscar «de Oviedo a Llanes»), los de más paradas primero
   const locs = {};
   for (const [id, p] of Object.entries(D.paradas)) if (p[1]) (locs[p[1]] = locs[p[1]] || []).push(id);
   const alias = D.alias || {};     // «Langreo» también se encuentra como «Llangréu»
-  LOCS = Object.entries(locs).map(([nombre, ids]) => ({ nombre, ids, alias: alias[nombre] || "", n: norm(nombre + " " + (alias[nombre] || "")) }))
+  const LOCS = Object.entries(locs).map(([nombre, ids]) => ({ nombre, ids, alias: alias[nombre] || "", n: norm(nombre + " " + (alias[nombre] || "")) }))
     .sort((a, b) => b.ids.length - a.ids.length);
+  return { PORPARADA, VIAJES_VAR, LOCS };
+}
+function usar(b) { D = b.D; PORPARADA = b.PORPARADA; VIAJES_VAR = b.VIAJES_VAR; LOCS = b.LOCS; }
+/* Hoy / Mañana (solo en la pestaña Viaje): mañana trae su propio horario */
+let HOY = null, MANANA = null, DIA = 0;
+async function setDia(d) {
+  if (d === DIA) return true;
+  if (d === 1 && !MANANA) {
+    $("iv-res").innerHTML = `<div class="vacio">Preparando el horario de mañana…</div>`;
+    for (let i = 0; i < 40; i++) {
+      try {
+        const j = await (await fetch("/api/cta/red?red=" + encodeURIComponent(RED_ID) + "&dia=manana")).json();
+        if (j.error && !j.cargando) { toast("No hay horario de mañana todavía"); return false; }
+        if (!j.cargando) { MANANA = { D: j, ...indexar(j) }; break; }
+      } catch (e) { /* reintenta */ }
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+    if (!MANANA) { toast("No se pudo cargar el horario de mañana"); return false; }
+  }
+  DIA = d;
+  usar(d ? MANANA : HOY);
+  document.querySelectorAll("[data-dia]").forEach((b) => b.setAttribute("aria-pressed", +b.dataset.dia === d));
   return true;
 }
 
@@ -138,7 +167,7 @@ function abrirLinea(c, vsel) {
 }
 document.addEventListener("click", (ev) => {
   const p = ev.target.closest("[data-parada]");
-  if (p) { abrirParada(p.dataset.parada); return; }
+  if (p) { if (DIA && p.closest(".hoja")) return; abrirParada(p.dataset.parada); return; }   // las horas de una parada son de hoy
   const l = ev.target.closest("[data-linea-card]");
   if (l) abrirLinea(l.dataset.lineaCard);
 });
@@ -385,7 +414,7 @@ $("iv-yo").onclick = () => {
 /* Todos los autobuses de hoy que van de un sitio a otro: en cada uno, se sube en la primera parada
    del origen donde se puede subir y se baja en la última del destino donde se puede bajar */
 function viajesEntre(de, a) {
-  const O = new Set(de.ids), A = new Set(a.ids), now = ahoraMin(), out = [];
+  const O = new Set(de.ids), A = new Set(a.ids), now = ahoraViaje(), out = [];
   D.variantes.forEach((v, vi) => {
     let par = null;
     for (let i = 0; i < v.paradas.length && !par; i++) {
@@ -393,7 +422,7 @@ function viajesEntre(de, a) {
       for (let j = v.paradas.length - 1; j > i; j--) if (A.has(v.paradas[j]) && puedeBajar(v, i, j)) { par = [i, j]; break; }
     }
     if (!par) return;
-    for (const [sal, p] of VIAJES_VAR[vi] || []) for (const base of [0, -1440]) {
+    for (const [sal, p] of VIAJES_VAR[vi] || []) for (const base of DIA ? [0] : [0, -1440]) {
       const off = D.patrones[p], ts = sal + base + off[par[0]], tl = sal + base + off[par[1]];
       if (ts < now - 30 || ts > now + 1440) continue;
       out.push({ vi, sal: sal + base, p, i: par[0], j: par[1], ts, tl });
@@ -405,17 +434,17 @@ const durTxt = (m) => { m = Math.round(m); return m < 60 ? m + " min" : Math.flo
 function buscarViaje() {
   const box = $("iv-res");
   if (!IV.de || !IV.a) { box.innerHTML = IV.de || IV.a ? "" : `<div class="vacio">Escribe de dónde sales y a dónde vas: un pueblo, una ciudad o una parada.</div>`; return; }
-  const now = ahoraMin(), todos = viajesEntre(IV.de, IV.a);
+  const now = ahoraViaje(), todos = viajesEntre(IV.de, IV.a), dm = DIA ? "mañana" : "hoy";
   IV.res = todos;
   const prox = todos.filter((r) => r.ts >= now - 0.5);
-  if (!todos.length) { box.innerHTML = `<div class="vacio">Hoy no hay autobuses directos de ${esc(IV.de.nombre)} a ${esc(IV.a.nombre)}.<br>Prueba con el pueblo de al lado o con una parada concreta.</div>`; return; }
-  const ult = todos.filter((r) => r.ts < now - 0.5).slice(-1);
+  if (!todos.length) { box.innerHTML = `<div class="vacio">${DIA ? "Mañana" : "Hoy"} no hay autobuses directos de ${esc(IV.de.nombre)} a ${esc(IV.a.nombre)}.<br>Prueba con el pueblo de al lado o con una parada concreta.</div>`; return; }
+  const ult = DIA ? [] : todos.filter((r) => r.ts < now - 0.5).slice(-1);
   const lista = [...ult, ...prox.slice(0, IV.mas)];
-  box.innerHTML = `<div class="iv-res-cab"><span>${prox.length ? `<b>${prox.length}</b> ${prox.length === 1 ? "autobús" : "autobuses"} más hoy` : "No quedan más autobuses hoy"}</span><span class="horario-tag">horario oficial</span></div>` +
+  box.innerHTML = `<div class="iv-res-cab"><span>${prox.length ? `<b>${prox.length}</b> ${prox.length === 1 ? "autobús" : "autobuses"} ${DIA ? "mañana" : "más hoy"}` : "No quedan más autobuses hoy"}</span><span class="horario-tag">horario oficial</span></div>` +
     lista.map((r) => {
       const v = D.variantes[r.vi], k = todos.indexOf(r), falta = r.ts - now;
       return `<button type="button" class="iv-viaje${falta < -0.5 ? " pasado" : ""}" data-iv="${k}">
-        <span class="iv-h"><b>${hm(r.ts)}</b><i>→</i>${hm(r.tl)}<small class="iv-dur"> · ${durTxt(r.tl - r.ts)}</small></span><span class="iv-en">${falta < -0.5 ? "ya salió" : enMin(r.ts)}</span>
+        <span class="iv-h"><b>${hm(r.ts)}</b><i>→</i>${hm(r.tl)}<small class="iv-dur"> · ${durTxt(r.tl - r.ts)}</small></span><span class="iv-en">${falta < -0.5 ? "ya salió" : DIA ? "mañana" : enMin(r.ts)}</span>
         <span class="iv-lin">${lb(v.linea)}<span>${esc(viaDe(v.linea))}</span></span>
         <span class="iv-par">${esc(nomParada(v.paradas[r.i]))} → ${esc(nomParada(v.paradas[r.j]))}</span></button>`;
     }).join("") + (prox.length > IV.mas ? `<button type="button" class="iv-mas" id="iv-mas">Ver más autobuses</button>` : "");
@@ -443,7 +472,8 @@ function abrirViaje(r) {
 }
 
 /* ------------------------------------------------------------ navegación */
-function irA(t) {
+async function irA(t) {
+  if (t !== "viaje" && DIA) await setDia(0);
   tab = t;
   for (const b of document.querySelectorAll("nav.tabs button")) b.setAttribute("aria-selected", b.dataset.tab === t);
   for (const s of document.querySelectorAll("main > section")) s.hidden = s.id !== "tab-" + t;
@@ -482,6 +512,7 @@ for (const b of document.querySelectorAll("nav.tabs button")) b.onclick = () => 
     if (tab === "mapa") pintarBuses();
     if (abrirParada._id && !$("hoja").hidden && $("h-lleg")) $("h-lleg").innerHTML = llegadasHtml(abrirParada._id, 10);
   }, 5000);
-  setInterval(() => { if (!document.hidden && tab === "viaje" && $("iv-sug").hidden) buscarViaje(); }, 30000);
+  document.querySelectorAll("[data-dia]").forEach((b) => { b.onclick = async () => { if (await setDia(+b.dataset.dia)) buscarViaje(); }; });
+  setInterval(() => { if (!document.hidden && tab === "viaje" && !DIA && $("iv-sug").hidden) buscarViaje(); }, 30000);
   setInterval(() => { if (!document.hidden && tab === "favoritos") pintarFavs(); }, 30000);
 })();
