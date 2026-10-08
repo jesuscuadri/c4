@@ -95,6 +95,9 @@ class TestRutas(unittest.TestCase):
         self.assertIsNotNone(p)
         self.assertEqual(p["sale_hm"], "10:00")
         self.assertEqual(p["llega_hm"], "12:10")
+        # el pueblo trae nodos de OTRO grafo (más paradas antes): no debe romperse
+        origen2 = dict(origen, nodos=[999, 1000])
+        self.assertIsNotNone(rutas.primero_manana(rutas.Grafo(EST, {"interurbano": red_bus()}), trenes, origen2, destino))
 
     def test_nombres_que_se_confunden(self):
         d = red_bus()

@@ -569,8 +569,20 @@ def trenes_de_horario(est, datos):
     return out
 
 
+def _de_este_grafo(g, punto):
+    """Un pueblo trae los números de nodo del grafo de hoy: en el de mañana hay que volver a buscarlos."""
+    if not punto.get("nodos"):
+        return punto
+    if punto.get("nombre") in g.localidades:
+        return g.punto_localidad(punto["nombre"])
+    p = dict(punto)
+    p.pop("nodos", None)
+    return p
+
+
 def primero_manana(g, trenes_manana, origen, destino):
     """El primer viaje de mañana (desde las 0:00) entre dos puntos, o None. g: grafo de mañana. Sin datos en vivo."""
+    origen, destino = _de_este_grafo(g, origen), _de_este_grafo(g, destino)
     plan = planificar(g, {"trenes": trenes_manana}, None, origen, destino, 0.0, en_vivo=False,
                       horizonte=24 * 60)
     if not plan.get("ok") or not plan.get("etapas"):
