@@ -30,6 +30,9 @@ from .util import RAIZ, WEB, http_get, ahora_min, distancia_km
 VERSION = "2.2"
 
 
+ARRANQUE = datetime.now().strftime("%d %H:%M:%S")
+
+
 class App:
     def __init__(self, cfg):
         self.cfg = cfg
@@ -384,7 +387,6 @@ class App:
         segundo plano la primera vez (el fichero del Consorcio pesa ~6 MB)."""
         if not hasattr(self, "_cta"):
             self._cta, self.error_cta, self._cta_en, self._cta_formas, self._cta_datos = {}, {}, set(), {}, {}
-            self._cta_manana = {}
             self._cta_lock = threading.Lock()
         dia = date.today() + timedelta(days=1 if manana else 0)
         clave = red + "+1" if manana else red
@@ -414,8 +416,6 @@ class App:
                     self._cta[clave] = (dia, (crudo, gzip.compress(crudo, 6)))
                     if not manana:
                         self._cta_datos[red] = (dia, d)
-                    else:
-                        self._cta_manana[red] = (dia, d)
                     self.error_cta.pop(clave, None)
                     print("Bus %s: %d líneas · %d paradas · %d viajes hoy" % (
                         d["nombre"], len(d["lineas"]), len(d["paradas"]), len(d["viajes"])))
@@ -690,7 +690,11 @@ class App:
             manana = date.today() + timedelta(days=1)
             for red, c in consorcio.REDES.items():
                 self.red_cta(red, True)       # por si aún no estaba preparado
-            redes = {r: d for r, (dia, d) in list(getattr(self, "_cta_manana", {}).items()) if dia == manana}
+            redes = {}      # el horario de mañana no se guarda como objeto (pesa): se lee del JSON ya preparado
+            for red in consorcio.REDES:
+                c = self._cta.get(red + "+1")
+                if c and c[0] == manana:
+                    redes[red] = json.loads(c[1][0])
             if self._manana[0] != manana:
                 self._manana = (manana, gtfs.extraer_red(self.cfg, manana))
             with self.lock:
@@ -898,7 +902,7 @@ def servir(app, abrir=True, en_red=False, publico=False):
                 q = parse_qs(urlparse(self.path).query)
                 return self._json(app.aprendizaje(q.get("linea", [""])[0] or None))
             if ruta == "/api/ping":
-                return self._json({"ok": True, "hora": datetime.now().strftime("%H:%M:%S")})
+                return self._json({"ok": True, "hora": datetime.now().strftime("%H:%M:%S"), "arranque": ARRANQUE})
             if ruta == "/api/cta/redes":
                 return self._json({"redes": [{"id": k, "nombre": v["nombre"], "color": v["color"], "tipo": v.get("tipo", "urbano")}
                                              for k, v in consorcio.REDES.items()]})
