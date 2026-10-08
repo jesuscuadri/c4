@@ -795,11 +795,35 @@ class App:
         else:
             p = rutas.planificar(g, res, bus, origen, destino, max(hora, desde), en_vivo=False)
         p["pedido"] = {"dia": dia, "modo": modo, "hora_hm": rutas.hm(hora)}
+        if not p.get("ok") and p.get("sin_servicio_hoy"):
+            self._sin_servicio_a_esa_hora(p, g, res, bus, origen, destino, hora, dia, modo)
         if dia == "manana":
             p["es_manana"] = True
         elif p.get("ok") and "sale" in p:
             p["sale_en"] = round(max(0.0, p["sale"] - ahora), 1)
         return p
+
+    def _sin_servicio_a_esa_hora(self, p, g, res, bus, origen, destino, hora, dia, modo):
+        """No hay nada a esa hora: se dice bien (no «hoy» si pidió mañana) y, si lo hay antes en el día, cuál es."""
+        o = rutas._corto(origen["nombre"])
+        d = rutas._corto(destino["nombre"])
+        cuando = "Mañana" if dia == "manana" else "Hoy"
+        tras = ("a partir de las %s" if modo == "salir" else "para llegar antes de las %s") % rutas.hm(hora)
+        p["error"] = "%s no hay trenes ni autobuses que te lleven de %s a %s %s." % (cuando, o, d, tras)
+        if dia != "manana":
+            self._anadir_manana(p, origen, destino)
+            return
+        if modo == "salir" and hora > 1:
+            try:
+                p0 = rutas.planificar(g, res, bus, origen, destino, 0.0, en_vivo=False, horizonte=24 * 60)
+            except Exception:  # noqa: BLE001
+                return
+            if p0.get("ok") and p0.get("etapas"):
+                p0["es_manana"] = True
+                primero = next((e for e in p0["etapas"] if e.get("sale_hm") and e["tipo"] in ("tren", "autobus", "bus")), None)
+                p["manana"] = {"sale_hm": primero["sale_hm"] if primero else p0["sale_hm"], "llega_hm": p0["llega_hm"], "plan": p0}
+                p["error"] += " Lo más pronto que hay mañana sale a las %s y llega a las %s." % (
+                    p["manana"]["sale_hm"], p0["llega_hm"])
 
     def ir(self, origen, destino, solo_tren=False, hora=None, dia="hoy", modo="salir"):
         if not origen:
