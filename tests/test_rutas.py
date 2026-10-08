@@ -107,6 +107,15 @@ class TestRutas(unittest.TestCase):
         self.assertIn("Mieres (cerca de Pola de Siero)", g.localidades)
         self.assertEqual(g.sugerir("mier")[0]["nombre"], "Mieres del Camín")
 
+    def test_dos_nombres_repetidos_a_la_vez(self):
+        d = red_bus()
+        d["paradas"].update({"M%d" % i: ["A", "Mieres", 43.40, -5.77] for i in range(9)})
+        d["paradas"].update({"N%d" % i: ["B", "Mieres del Camín", 43.25, -5.77] for i in range(12)})
+        d["paradas"].update({"P%d" % i: ["C", "Pola", 43.39, -5.50] for i in range(9)})
+        d["paradas"].update({"Q%d" % i: ["D", "Pola de Siero", 43.39, -5.66] for i in range(15)})
+        g = rutas.Grafo(EST, {"interurbano": d})          # antes fallaba con KeyError
+        self.assertTrue(all(k in g.localidades for k in g.grande_de.values()))
+
     def test_cambio_andando(self):
         # S3 y la estación A están a unos 150 m: se puede cambiar andando
         i3, ia = self.g.idx[("S", "S3")], self.g.idx[("T", 0)]

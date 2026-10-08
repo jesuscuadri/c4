@@ -649,13 +649,20 @@ class App:
         hoy = date.today()
         redes = {r: d for r, (dia, d) in list(datos.items()) if dia == hoy}
         if est is None or not redes:
+            self.diag_grafo = {"sin_estaciones": est is None, "redes_hoy": sorted(redes),
+                               "redes_cargadas": {r: str(dia) for r, (dia, _) in list(datos.items())}, "hoy": str(hoy)}
             return None
         if not hasattr(self, "_rutas"):
             self._rutas = rutas.Cache()
         try:
-            return self._rutas.obtener(est, redes)
-        except Exception:  # noqa: BLE001
+            t0 = time.time()
+            g = self._rutas.obtener(est, redes)
+            self.diag_grafo = {"redes": sorted(redes), "nodos": len(g.nodos), "localidades": len(g.localidades),
+                               "segundos": round(time.time() - t0, 1)}
+            return g
+        except Exception as e:  # noqa: BLE001
             traceback.print_exc()
+            self.diag_grafo = {"error": "%s: %s" % (type(e).__name__, e)}
             return None
 
     def sugerir(self, q):
@@ -901,6 +908,9 @@ def servir(app, abrir=True, en_red=False, publico=False):
             if ruta == "/api/aprendizaje":
                 q = parse_qs(urlparse(self.path).query)
                 return self._json(app.aprendizaje(q.get("linea", [""])[0] or None))
+            if ruta == "/api/diag":
+                return self._json({"grafo": getattr(app, "diag_grafo", None), "errores_cta": getattr(app, "error_cta", {}),
+                                   "arranque": ARRANQUE})
             if ruta == "/api/ping":
                 return self._json({"ok": True, "hora": datetime.now().strftime("%H:%M:%S"), "arranque": ARRANQUE})
             if ruta == "/api/cta/redes":

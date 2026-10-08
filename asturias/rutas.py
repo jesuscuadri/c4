@@ -94,25 +94,32 @@ class Grafo:
         frente a «Mieres del Camín»), el pequeño pasa a llamarse «Mieres (cerca de Pola de Siero)»
         para no confundirlos, y al buscar «Mieres» sale el grande."""
         self.grande_de = {}           # nombre corto -> el pueblo grande que empieza así
-        nombres = list(self.localidades)
+        base = {loc: list(ns) for loc, ns in self.localidades.items()}      # foto de antes de renombrar nada
+        nombres = list(base)
         nn = {loc: normaliza(loc) for loc in nombres}
+        centro = {loc: self._centro_de(ns) for loc, ns in base.items()}
+        nuevos = {}
         for loc in nombres:
             mayores = [m for m in nombres if m != loc and nn[m].startswith(nn[loc] + " ")
-                       and len(self.localidades[m]) >= len(self.localidades[loc])]
+                       and len(base[m]) >= len(base[loc])]
             if not mayores:
                 continue
-            grande = max(mayores, key=lambda m: len(self.localidades[m]))
-            ns = self.localidades[loc]
-            lat = sum(self.nodos[i][3] for i in ns) / len(ns)
-            lon = sum(self.nodos[i][4] for i in ns) / len(ns)
-            otros = [(distancia_km((lat, lon), self._centro(m)), m) for m in nombres
-                     if m not in (loc, grande) and len(self.localidades[m]) >= 8]
+            grande = max(mayores, key=lambda m: len(base[m]))
+            lat, lon = centro[loc]
+            otros = [(distancia_km((lat, lon), centro[m]), m) for m in nombres
+                     if m not in (loc, grande) and len(base[m]) >= 8]
             ref = min(otros)[1] if otros else None
             nuevo = "%s (cerca de %s)" % (loc, ref) if ref else "%s (pueblo pequeño)" % loc
             self.localidades[nuevo] = self.localidades.pop(loc)
+            nuevos[loc] = nuevo
             self.grande_de[nn[loc]] = grande
             if loc in self.alias:
                 self.alias[nuevo] = self.alias[loc]
+        for k, v in list(self.grande_de.items()):
+            self.grande_de[k] = nuevos.get(v, v)
+
+    def _centro_de(self, ns):
+        return (sum(self.nodos[i][3] for i in ns) / len(ns), sum(self.nodos[i][4] for i in ns) / len(ns))
 
     def _centro(self, loc):
         ns = self.localidades[loc]
