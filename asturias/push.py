@@ -573,7 +573,7 @@ class Avisos:
             ref, v = a["ref"], primer_vehiculo(p, am)
             if ref["tipo"] == "tren" and self._alertas_fn:
                 nuevas = []
-                for t in self._alertas_fn() or []:
+                for t in self._alertas_fn(ref["linea"]) or []:
                     h = hashlib.md5(t.encode("utf-8")).hexdigest()[:8]
                     if h not in a["vistos"]:
                         a["vistos"].append(h)

@@ -95,7 +95,7 @@ class TestAvisos(unittest.TestCase):
             self.pedidos.append((q, hora))
             return self.plan
         self.av = push.Avisos(None, reloj=lambda: self.t, enviar_fn=falso, plan_fn=plan_fn,
-                              cancelado_fn=lambda i: i in self.cancelados, alertas_fn=lambda: self.alertas)
+                              cancelado_fn=lambda i: i in self.cancelados, alertas_fn=lambda linea: self.alertas)
 
     def esperar(self):
         import threading

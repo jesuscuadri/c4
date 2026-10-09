@@ -854,7 +854,7 @@ class App:
             if p.get("ok") and not p.get("es_manana") and any(e.get("tipo") == "tren" for e in p.get("etapas", [])):
                 with self.lock:
                     res = self.res
-                aviso = perturbacion(res)
+                aviso = perturbacion(res, {e.get("linea") or "C4" for e in p["etapas"] if e.get("tipo") == "tren"})
                 if aviso and aviso not in p.setdefault("avisos", []):
                     p["avisos"].append(aviso)
         except Exception:  # noqa: BLE001
@@ -902,12 +902,12 @@ class App:
             res = self.res
         return bool(res) and any(t.get("id") == tid and t.get("cancelado") for t in res.get("trenes", []))
 
-    def _alertas_renfe(self):
+    def _alertas_renfe(self, linea=None):
         rt = getattr(self, "rt", None)
         textos = [a["texto"] for a in (getattr(rt, "avisos_detalle", None) or [])]
         with self.lock:
             res = self.res
-        extra = perturbacion(res)
+        extra = perturbacion(res, {linea} if linea else None)
         return textos + ([extra] if extra else [])
 
     def bucle(self):
@@ -1021,16 +1021,17 @@ def ip_local():
 
 
 PERTURBACION_MIN = 10        # un tren con tanto retraso (con datos reales) y en marcha = algo pasa en la línea
-TEXTO_PERTURBACION = ("Hay trenes de la C4 con más de 10 min de retraso: puede haber una incidencia en la línea aunque Renfe "
-                      "no la haya publicado. Los trenes sin datos en directo pueden llevar también retraso.")
 
 
-def perturbacion(res):
-    """Texto de aviso si algún tren en marcha, con datos reales, lleva un retraso grande (hay una incidencia
-    aunque Renfe no la publique); None si todo va normal."""
+def perturbacion(res, lineas=None):
+    """Texto de aviso si algún tren en marcha de esas líneas, con datos reales, lleva un retraso grande (hay una
+    incidencia aunque Renfe no la publique); None si todo va normal. `lineas`: solo se miran trenes de esas líneas."""
     for t in (res or {}).get("trenes", []):
+        if lineas is not None and t.get("linea") not in lineas:
+            continue
         if t.get("con_datos") and not t.get("fin") and not t.get("cancelado") and (t.get("retraso") or 0) >= PERTURBACION_MIN:
-            return TEXTO_PERTURBACION
+            return ("Hay trenes de la %s con más de 10 min de retraso: puede haber una incidencia en la línea aunque Renfe no la "
+                    "haya publicado. Los trenes sin datos en directo pueden llevar también retraso." % (t.get("linea") or "línea"))
     return None
 
 
