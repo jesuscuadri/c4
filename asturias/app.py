@@ -849,6 +849,19 @@ class App:
                     p["manana"]["sale_hm"], p0["llega_hm"])
 
     def ir(self, origen, destino, solo_tren=False, hora=None, dia="hoy", modo="salir"):
+        p = self._ir(origen, destino, solo_tren, hora, dia, modo)
+        try:
+            if p.get("ok") and not p.get("es_manana") and any(e.get("tipo") == "tren" for e in p.get("etapas", [])):
+                with self.lock:
+                    res = self.res
+                aviso = perturbacion(res)
+                if aviso and aviso not in p.setdefault("avisos", []):
+                    p["avisos"].append(aviso)
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
+        return p
+
+    def _ir(self, origen, destino, solo_tren=False, hora=None, dia="hoy", modo="salir"):
         if not origen:
             return {"ok": False, "error": "Falta el origen.", "cual": "origen"}
         if not destino:
@@ -891,7 +904,11 @@ class App:
 
     def _alertas_renfe(self):
         rt = getattr(self, "rt", None)
-        return [a["texto"] for a in (getattr(rt, "avisos_detalle", None) or [])]
+        textos = [a["texto"] for a in (getattr(rt, "avisos_detalle", None) or [])]
+        with self.lock:
+            res = self.res
+        extra = perturbacion(res)
+        return textos + ([extra] if extra else [])
 
     def bucle(self):
         # el horario de los buses del Consorcio, preparado de antemano (tarda unos segundos)
@@ -1001,6 +1018,20 @@ def ip_local():
         return ip
     except OSError:
         return None
+
+
+PERTURBACION_MIN = 10        # un tren con tanto retraso (con datos reales) y en marcha = algo pasa en la línea
+TEXTO_PERTURBACION = ("Hay trenes de la C4 con más de 10 min de retraso: puede haber una incidencia en la línea aunque Renfe "
+                      "no la haya publicado. Los trenes sin datos en directo pueden llevar también retraso.")
+
+
+def perturbacion(res):
+    """Texto de aviso si algún tren en marcha, con datos reales, lleva un retraso grande (hay una incidencia
+    aunque Renfe no la publique); None si todo va normal."""
+    for t in (res or {}).get("trenes", []):
+        if t.get("con_datos") and not t.get("fin") and not t.get("cancelado") and (t.get("retraso") or 0) >= PERTURBACION_MIN:
+            return TEXTO_PERTURBACION
+    return None
 
 
 def servir(app, abrir=True, en_red=False, publico=False):
