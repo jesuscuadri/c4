@@ -26,5 +26,15 @@ class TestPerturbacion(unittest.TestCase):
         self.assertIsNone(A.perturbacion({"trenes": []}))
 
 
+class TestSinTiempoReal(unittest.TestCase):
+    def test_todo_por_horario(self):
+        en_marcha = {"linea": "C4", "con_datos": False, "fin": False, "j0": 3}
+        self.assertTrue(A.sin_tiempo_real({"trenes": [en_marcha]}, {"C4"}))
+        self.assertFalse(A.sin_tiempo_real({"trenes": [en_marcha, dict(en_marcha, con_datos=True)]}, {"C4"}))
+        self.assertFalse(A.sin_tiempo_real({"trenes": [dict(en_marcha, j0=0)]}, {"C4"}))     # aún no ha salido nadie
+        self.assertFalse(A.sin_tiempo_real({"trenes": [en_marcha]}, {"C1"}))                  # otra línea
+        self.assertFalse(A.sin_tiempo_real(None, {"C4"}))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -14,7 +14,7 @@ from datetime import date, datetime, timedelta
 from urllib.parse import parse_qs, urlparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from .trenes import gtfs
+from .trenes import adif, gtfs
 from .trenes import planificador
 from . import push, rutas
 from .bus import consorcio, emtusa_horario
@@ -58,6 +58,7 @@ class App:
         self.salidas = {}
         self.paradas = {}
         self.almacen = Almacen()               # guarda lo aprendido fuera del servidor (GitHub)
+        self.adif = adif.Adif()                # avisos de incidencias que enseña Adif en sus estaciones
         self.push = push.Avisos(self.almacen, plan_fn=self.plan_para_aviso, cancelado_fn=self._tren_cancelado,
                                 alertas_fn=self._alertas_renfe)   # avisos al móvil («tu bus sale en N minutos»)
         self.ultimo_aprendizaje = 0
@@ -320,6 +321,7 @@ class App:
             "ts_feed": datetime.fromtimestamp(self.rt.ts_feed).strftime("%H:%M:%S") if self.rt.ts_feed else None,
             "error": self.rt.error,
             "avisos": self.rt.avisos,
+            "avisos_adif": [{"texto": a["texto"], "lineas": a["lineas"]} for a in self.adif.avisos],
             "avisos_lineas": [{"texto": a["texto"], "lineas": self._lineas_de_aviso(a)}
                               for a in getattr(self.rt, "avisos_detalle", [])],
             "con_posicion": sum(1 for t in trenes if t["con_datos"] and not t["fin"]),
@@ -854,7 +856,14 @@ class App:
             if p.get("ok") and not p.get("es_manana") and any(e.get("tipo") == "tren" for e in p.get("etapas", [])):
                 with self.lock:
                     res = self.res
-                aviso = perturbacion(res, {e.get("linea") or "C4" for e in p["etapas"] if e.get("tipo") == "tren"})
+                lins = {e.get("linea") or "C4" for e in p["etapas"] if e.get("tipo") == "tren"}
+                for t in self.adif.para_lineas(lins):
+                    if "Adif avisa: " + t not in p.setdefault("avisos", []):
+                        p["avisos"].append("Adif avisa: " + t)
+                aviso = perturbacion(res, lins)
+                if not aviso and sin_tiempo_real(res, lins):
+                    aviso = ("Renfe no da ahora datos en directo de la %s: los trenes van por horario y pueden llevar retraso."
+                             % "/".join(sorted(lins)))
                 if aviso and aviso not in p.setdefault("avisos", []):
                     p["avisos"].append(aviso)
         except Exception:  # noqa: BLE001
@@ -908,7 +917,7 @@ class App:
         with self.lock:
             res = self.res
         extra = perturbacion(res, {linea} if linea else None)
-        return textos + ([extra] if extra else [])
+        return textos + self.adif.para_lineas({linea} if linea else None) + ([extra] if extra else [])
 
     def bucle(self):
         # el horario de los buses del Consorcio, preparado de antemano (tarda unos segundos)
@@ -936,6 +945,7 @@ class App:
         while True:
             try:
                 self._mantener_manana()
+                self.adif.actualizar()
                 self.push.revisar()
                 # Renfe publica posiciones cada ~20 s. Se le pregunta cada pocos segundos si hay algo
                 # nuevo (normalmente contesta «sin cambios» sin mandar nada) y, en cuanto lo hay,
@@ -1033,6 +1043,12 @@ def perturbacion(res, lineas=None):
             return ("Hay trenes de la %s con más de 10 min de retraso: puede haber una incidencia en la línea aunque Renfe no la "
                     "haya publicado. Los trenes sin datos en directo pueden llevar también retraso." % (t.get("linea") or "línea"))
     return None
+
+
+def sin_tiempo_real(res, lineas):
+    """True si hay trenes de esas líneas ya en marcha y ninguno tiene datos reales de Renfe: todo va «por horario»."""
+    en_marcha = [t for t in (res or {}).get("trenes", []) if t.get("linea") in lineas and not t.get("fin") and (t.get("j0") or 0) > 0]
+    return bool(en_marcha) and not any(t.get("con_datos") for t in en_marcha)
 
 
 def servir(app, abrir=True, en_red=False, publico=False):
@@ -1134,7 +1150,9 @@ def servir(app, abrir=True, en_red=False, publico=False):
                 return self._json(app.aprendizaje(q.get("linea", [""])[0] or None))
             if ruta == "/api/diag":
                 return self._json({"grafo": getattr(app, "diag_grafo", None), "errores_cta": getattr(app, "error_cta", {}),
-                                   "arranque": ARRANQUE})
+                                   "arranque": ARRANQUE,
+                                   "adif": {"ts": app.adif.ts, "error": app.adif.error, "estaciones": app.adif.estado,
+                                            "avisos": app.adif.avisos}})
             if ruta == "/api/ping":
                 return self._json({"ok": True, "hora": datetime.now().strftime("%H:%M:%S"), "arranque": ARRANQUE})
             if ruta == "/api/cta/redes":

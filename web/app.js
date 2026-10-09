@@ -224,24 +224,28 @@ async function cargarPrecision() {
 function pintarEstado() {
   const c = $("chip");
   const viejo = edadDatos() > 90;
-  c.className = "chip " + (viejo ? "congelado" : R.calidad);
-  const txt = { directo: `En directo · ${R.con_posicion} trenes localizados`,
+  const soloHorario = R.calidad === "directo" && !R.con_posicion && R.en_circulacion > 0;   // Renfe publica, pero sin ningún tren de Asturias
+  c.className = "chip " + (viejo || soloHorario ? "congelado" : R.calidad);
+  const txt = { directo: soloHorario ? "Sin datos de trenes · solo horario" : `En directo · ${R.con_posicion} trenes localizados`,
                 congelado: "Renfe no actualiza · usando horario",
                 sin_posiciones: "Renfe no da posiciones · último retraso conocido",
                 sin_conexion: "Sin conexión con Renfe · usando horario" }[R.calidad];
-  const corto = { directo: "En directo", congelado: "Sin datos Renfe", sin_posiciones: "Renfe sin datos", sin_conexion: "Sin conexión" }[R.calidad];
+  const corto = { directo: soloHorario ? "Solo horario" : "En directo", congelado: "Sin datos Renfe", sin_posiciones: "Renfe sin datos", sin_conexion: "Sin conexión" }[R.calidad];
   $("chip-txt").innerHTML = viejo ? `<span class="txt">Actualizando…</span><span class="corto">Actualizando…</span>`
     : `<span class="txt">${txt}</span><span class="corto">${corto}</span>`;
   c.title = `Última lectura ${R.actualizado}` + (R.ts_feed ? ` · datos de Renfe de las ${R.ts_feed}` : "");
   let h = "";
   if (viejo)
     h += `<div class="aviso warn"><span>⏳</span><div><b>Datos de las ${esc(R.actualizado.slice(0, 5))}.</b> El servidor se está despertando o no hay conexión: en cuanto responda se actualiza solo.</div></div>`;
+  if (soloHorario && !viejo)
+    h += `<div class="aviso warn"><span>⚠</span><div><b>Renfe no da ahora la posición de ningún tren de Asturias.</b> Todo va por horario: los retrasos que ves son estimaciones, no medidas, y un tren puede salir más tarde de lo que marca.</div></div>`;
   if (R.calidad === "congelado")
     h += `<div class="aviso warn"><span>⚠</span><div><b>Los datos en tiempo real de Renfe están parados</b> (último dato ${R.ts_feed || "?"}). Mientras tanto se calcula con el horario, así que las esperas por cruces con trenes retrasados no se ven.</div></div>`;
   if (R.calidad === "sin_posiciones")
     h += `<div class="aviso warn"><span>⚠</span><div><b>Renfe no está publicando la posición de ningún tren</b> (su servicio de tiempo real va vacío en toda España). Mientras tanto cada tren sigue con el último retraso que se le vio; los que no se habían visto, con el horario.</div></div>`;
   if (R.calidad === "sin_conexion")
     h += `<div class="aviso bad" title="${esc(R.error || "")}"><span>⚠</span><div><b>No se puede leer el tiempo real de Renfe ahora mismo.</b> Mientras tanto se muestra el horario oficial; en cuanto vuelva, se actualiza solo.</div></div>`;
+  for (const a of R.avisos_adif || []) if (!a.lineas.length || a.lineas.includes(LSEL)) h += `<div class="aviso warn"><span>⚠</span><div><b>Aviso de Adif:</b> ${esc(a.texto)}</div></div>`;
   for (const a of R.avisos || []) h += `<div class="aviso info"><span>ℹ</span><div><b>Aviso de Renfe:</b> ${esc(a)}</div></div>`;
   $("avisos").innerHTML = h;
   $("pie").innerHTML = `<a href="/?elegir" class="pie-link">🚆/🚌 Elegir tren o bus al entrar</a><br>` + esc(`Datos: Renfe (horario oficial GTFS y tiempo real) · actualizado ${R.actualizado} · ` +
